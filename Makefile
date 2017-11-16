@@ -1,4 +1,5 @@
 all:
+	git submodule update --init --recursive
 	cd wabt && $(MAKE) gcc-release 
 	g++ \
 	 my-interp.cc \
