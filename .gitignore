@@ -1,2 +1,8 @@
 my-interp
 **/*.wasm
+
+*.tar.xz
+llvm
+llvm-build
+
+wasm/cpp/build
