@@ -47,7 +47,7 @@
         memoryUint8Array = new Uint8Array(inst.exports.memory.buffer);
         var lib = inst.exports;
         console.log("hello from c",lib.export_function(41));
-        console.log("Hello from print export",readBuff(memoryUint8Array,lib.print_export());
+        console.log("Hello from print export",readBuff(memoryUint8Array,lib.print_export()));
       });
       
 	fetch('/wasm/rust/hello-rust.wasm').then(response =>
