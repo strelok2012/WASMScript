@@ -1,29 +1,29 @@
 #![no_std]
+#![no_main]
 #![feature(lang_items)]
-#![feature(start)]
-#![feature(libc)]
 
-#![feature(fundamental)]
+#[lang = "panic_fmt"]  fn panic_fmt() -> ! { loop {} }
 
-extern crate libc;
+mod wasm {
+    pub fn _import_function(i: isize) -> isize {
+        unsafe { import_function(i) }
+    }
 
-#[lang = "eh_personality"] extern fn eh_personality() {}
-#[lang = "panic_fmt"] #[no_mangle] fn panic_fmt() -> ! { loop {} }
-
-
-
+    extern {
+        fn import_function(i: isize) -> isize;
+    }
+}
 
 #[no_mangle]
-pub fn exportFunction(i_test: isize) -> isize {
-    let result = i_test+1;
-    result
+pub fn export_function(i_test: isize) -> isize {
+	wasm::_import_function(i_test*2);
+	let result = i_test+1;
+	result
 }
 
-// Entry point for this program
-#[start]
-fn start(_argc: isize, _argv: *const *const u8) -> isize {
-    0
-}
+#[no_mangle]
+pub extern fn main() { }
+
 
 
 

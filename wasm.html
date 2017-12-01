@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <title>Wasm Test</title>
+</head>
+<body>
+<script type='text/javascript'>
+	var myImports = {
+		env: {
+			rust_begin_unwind: function(){},
+			import_function: function(i){
+				console.log("Import called with param",i);
+				return i*2
+			}
+		}
+	}
+    fetch('/wasm/c/hello-c.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.compile(bytes)
+      ).then(function(mod) {
+        var imports = WebAssembly.Module.imports(mod);
+        var inst = new WebAssembly.Instance(mod,myImports);
+        var lib = inst.exports;
+        console.log("hello from c",lib.export_function(41));
+      });
+      
+	fetch('/wasm/rust/hello-rust.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.compile(bytes)
+      ).then(function(mod) {
+        var imports = WebAssembly.Module.imports(mod);
+        var inst = new WebAssembly.Instance(mod,myImports);
+        var lib = inst.exports;
+        console.log("hello from rust",lib.export_function(41));
+      });
+      
+    fetch('/wasm/as/hello-as.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.compile(bytes)
+      ).then(function(mod) {
+        var imports = WebAssembly.Module.imports(mod);
+        var inst = new WebAssembly.Instance(mod,myImports);
+        var lib = inst.exports;
+        console.log("hello from AssemblyScript",lib.export_function(41));
+      });
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
-declare function env$importFunction(i_test: i32): i32;
+declare function env$import_function(i_test: i32): i32;
 
-export function exportFunction(i_test: i32): i32 {
-  env$importFunction(i_test*2);
+export function export_function(i_test: i32): i32 {
+  env$import_function(i_test*2);
   return ++i_test;
 }

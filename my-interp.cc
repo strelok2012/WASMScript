@@ -89,7 +89,7 @@ static void ParseOptions(int argc, char** argv) {
   parser.AddOption('E', "run-my-export", "SIZE",
                      "Run export",
                      [](const std::string& argument) {
-	  	  	  	  s_run_export = true;
+							s_run_export = true;
 	  	  	  	  	  	  callExport = argument;
                      });
   parser.AddOption('C', "call-stack-size", "SIZE",
@@ -202,10 +202,14 @@ class WasmInterpHostImportDelegate : public HostImportDelegate {
       cast<HostFunc>(func)->callback = PrintCallback;
       return wabt::Result::Ok;
     }
-    else if (import->field_name == "importFunction") {
+    else if (import->field_name == "import_function") {
         cast<HostFunc>(func)->callback = MyImportCallback;
         return wabt::Result::Ok;
-      }
+    }
+    else if (import->field_name == "rust_begin_unwind") {
+        cast<HostFunc>(func)->callback = RustUnwindCallback;
+        return wabt::Result::Ok;
+    }
     else {
       PrintError(callback, "unknown host function import " PRIimport,
                  PRINTF_IMPORT_ARG(*import));
@@ -279,6 +283,16 @@ class WasmInterpHostImportDelegate : public HostImportDelegate {
 
       WriteCall(s_stdout_stream.get(), func->module_name, func->field_name,
                 vec_args, vec_results, interp::Result::Ok);
+      return interp::Result::Ok;
+    }
+    
+    static interp::Result RustUnwindCallback(const HostFunc* func,
+                                        const interp::FuncSignature* sig,
+                                        Index num_args,
+                                        TypedValue* args,
+                                        Index num_results,
+                                        TypedValue* out_results,
+                                        void* user_data) {
       return interp::Result::Ok;
     }
 
