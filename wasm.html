@@ -6,12 +6,34 @@
 </head>
 <body>
 <script type='text/javascript'>
+	var memoryUint8Array = null;
+	
+	function uintToString(uintArray) {
+		var encodedString = String.fromCharCode.apply(null, uintArray),
+			decodedString = decodeURIComponent(escape(encodedString));
+		return decodedString;
+	}
+	
+	function readBuff(buffer,offset){
+		var current = buffer[offset];
+		var start = offset;
+		var end = start;
+		while(current!== 0){
+			offset++;
+			current = buffer[offset];
+		}
+		end = offset;
+		return new TextDecoder().decode(buffer.slice(start,end));
+	}
 	var myImports = {
 		env: {
 			rust_begin_unwind: function(){},
 			import_function: function(i){
 				console.log("Import called with param",i);
 				return i*2
+			},
+			print_function: function(str){
+				console.log(readBuff(memoryUint8Array,str));
 			}
 		}
 	}
@@ -22,8 +44,10 @@
       ).then(function(mod) {
         var imports = WebAssembly.Module.imports(mod);
         var inst = new WebAssembly.Instance(mod,myImports);
+        memoryUint8Array = new Uint8Array(inst.exports.memory.buffer);
         var lib = inst.exports;
         console.log("hello from c",lib.export_function(41));
+        console.log("Hello from print export",readBuff(memoryUint8Array,lib.print_export());
       });
       
 	fetch('/wasm/rust/hello-rust.wasm').then(response =>
