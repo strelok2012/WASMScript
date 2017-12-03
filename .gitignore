@@ -4,5 +4,7 @@ my-interp
 *.tar.xz
 llvm
 llvm-build
+emsdk
 
 wasm/cpp/build
+interp/build
