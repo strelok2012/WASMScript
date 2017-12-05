@@ -8,15 +8,15 @@ AS_BIN=asc
 WASM_DIR=./wasm
 
 function build_wasm_c {
-	$LLVM_BIN_DIR/clang -emit-llvm --target=wasm32 -Oz $WASM_DIR/c/hello.c -c -o $WASM_DIR/c/hello.bc
-	$LLVM_BIN_DIR/clang -emit-llvm --target=wasm32 -Oz $WASM_DIR/c/hello-2.c -c -o $WASM_DIR/c/hello-2.bc
-	$LLVM_BIN_DIR/llvm-link $WASM_DIR/c/hello.bc $WASM_DIR/c/hello-2.bc -o $WASM_DIR/c/hello-c.bc
-	$LLVM_BIN_DIR/llc -asm-verbose=false -o $WASM_DIR/c/hello-c.s $WASM_DIR/c/hello-c.bc
-	$BINARYEN_BIN_DIR/s2wasm $WASM_DIR/c/hello-c.s > $WASM_DIR/c/hello-c.wast
-	$WABT_BIN_DIR/wat2wasm $WASM_DIR/c/hello-c.wast -o $WASM_DIR/c/hello-c.wasm
-	rm -f $WASM_DIR/c/*.bc
-	rm -f $WASM_DIR/c/*.s
-	rm -f $WASM_DIR/c/*.wast
+	$LLVM_BIN_DIR/clang -emit-llvm --target=wasm32 -Oz $WASM_DIR/cpp/hello.c -c -o $WASM_DIR/cpp/hello.bc
+	$LLVM_BIN_DIR/clang -emit-llvm --target=wasm32 -Oz $WASM_DIR/cpp/hello-2.c -c -o $WASM_DIR/cpp/hello-2.bc
+	$LLVM_BIN_DIR/llvm-link $WASM_DIR/cpp/hello.bc $WASM_DIR/cpp/hello-2.bc -o $WASM_DIR/cpp/hello-c.bc
+	$LLVM_BIN_DIR/llc -asm-verbose=false -o $WASM_DIR/cpp/hello-c.s $WASM_DIR/cpp/hello-c.bc
+	$BINARYEN_BIN_DIR/s2wasm $WASM_DIR/cpp/hello-c.s > $WASM_DIR/cpp/hello-c.wast
+	$WABT_BIN_DIR/wat2wasm $WASM_DIR/cpp/hello-c.wast -o $WASM_DIR/cpp/hello-c.wasm
+	rm -f $WASM_DIR/cpp/*.bc
+	rm -f $WASM_DIR/cpp/*.s
+	rm -f $WASM_DIR/cpp/*.wast
 }
 
 function build_wasm_as {
@@ -34,7 +34,7 @@ function build_wasm_rust {
 
 function run_wasm_c {
 	echo -e "\033[32mRunning C...\033[0m"
-	$(pwd)/my-interp wasm/c/hello-c.wasm -E export_function
+	$(pwd)/my-interp wasm/cpp/hello-c.wasm -E export_function
 }
 
 function run_wasm_as {

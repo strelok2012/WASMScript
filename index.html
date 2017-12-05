@@ -5,6 +5,17 @@
     <title>Wasm Test</title>
 </head>
 <body>
+<div id="cppLog">
+<p>CPP log</p>
+</div>
+<br>
+<div id="rustLog">
+<p>Rust log</p>
+</div>
+<br>
+<div id="asLog">
+<p>AS log</p>
+</div>
 <script type='text/javascript'>
 	var memoryUint8Array = null;
 	
@@ -37,7 +48,11 @@
 			}
 		}
 	}
-    fetch('/wasm/c/hello-c.wasm').then(response =>
+	var rustLog = document.getElementById('rustLog');
+	var cppLog = document.getElementById('cppLog');
+	var asLog = document.getElementById('asLog');
+	
+    fetch('/wasm/cpp/build/cpp.wasm').then(response =>
         response.arrayBuffer()
       ).then(bytes =>
         WebAssembly.compile(bytes)
@@ -46,9 +61,15 @@
         var inst = new WebAssembly.Instance(mod,myImports);
         memoryUint8Array = new Uint8Array(inst.exports.memory.buffer);
         var lib = inst.exports;
-        console.log("hello from c",lib.export_function(41));
-        console.log("Hello from print export",readBuff(memoryUint8Array,lib.print_export()));
-      });
+        
+
+		cppLog.innerHTML += "hello from c "+lib.export_function(41)+"<br>";
+		//cppLog.innerHTML += "Hello from print export "+readBuff(memoryUint8Array,lib.print_export())+"<br>";
+        console.log("Hello from c",lib.export_function(41));
+        //console.log("Hello from print export",readBuff(memoryUint8Array,lib.print_export()));
+      }).catch(function(e){
+		  cppLog.innerHTML += "Fetching CPP error:"+e+"<br>";
+	  });
       
 	fetch('/wasm/rust/hello-rust.wasm').then(response =>
         response.arrayBuffer()
@@ -58,8 +79,13 @@
         var imports = WebAssembly.Module.imports(mod);
         var inst = new WebAssembly.Instance(mod,myImports);
         var lib = inst.exports;
+        
+
+		rustLog.innerHTML += "Hello from rust "+lib.export_function(41)+"<br>";
         console.log("hello from rust",lib.export_function(41));
-      });
+      }).catch(function(e){
+		  rustLog.innerHTML += "Fetching Rust error: "+e+"<br>";
+	  });
       
     fetch('/wasm/as/hello-as.wasm').then(response =>
         response.arrayBuffer()
@@ -69,8 +95,12 @@
         var imports = WebAssembly.Module.imports(mod);
         var inst = new WebAssembly.Instance(mod,myImports);
         var lib = inst.exports;
+        
+        asLog.innerHTML += "Hello from AssemblyScript "+lib.export_function(41)+"<br>";
         console.log("hello from AssemblyScript",lib.export_function(41));
-      });
+      }).catch(function(e){
+		  asLog.innerHTML += "Fetching AssemblyScript error: "+e+"<br>";
+	  });
 </script>
 </body>
 </html>
