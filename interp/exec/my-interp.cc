@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <exec/ImportDelegate.h>
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -24,12 +25,6 @@
 #include <vector>
 #include <iostream>
 
-#include "src/binary-reader-interp.h"
-#include "src/binary-reader.h"
-#include "src/cast.h"
-#include "src/error-handler.h"
-#include "src/interp.h"
-#include "src/option-parser.h"
 
 using namespace wabt;
 using namespace wabt::interp;
@@ -41,8 +36,8 @@ static Stream* s_trace_stream;
 static Features s_features;
 std::string callExport;
 
+std::unique_ptr<FileStream> s_stdout_stream;
 static std::unique_ptr<FileStream> s_log_stream;
-static std::unique_ptr<FileStream> s_stdout_stream;
 
 enum class RunVerbosity {
 	Quiet = 0,
@@ -132,103 +127,9 @@ static wabt::Result ReadModule(const char* module_filename, Environment* env, Er
 	return result;
 }
 
-#define PRIimport "\"" PRIstringview "." PRIstringview "\""
-#define PRINTF_IMPORT_ARG(x) WABT_PRINTF_STRING_VIEW_ARG((x).module_name) , WABT_PRINTF_STRING_VIEW_ARG((x).field_name)
-
-class WasmInterpHostImportDelegate: public HostImportDelegate {
-public:
-	wabt::Result ImportFunc(interp::FuncImport* import, interp::Func* func,
-			interp::FuncSignature* func_sig, const ErrorCallback& callback)
-					override {
-		if (import->field_name == "print") {
-			cast<HostFunc>(func)->callback = PrintCallback;
-			return wabt::Result::Ok;
-		} else if (import->field_name == "import_function") {
-			cast<HostFunc>(func)->callback = MyImportCallback;
-			return wabt::Result::Ok;
-		} else if (import->field_name == "rust_begin_unwind") {
-			cast<HostFunc>(func)->callback = RustUnwindCallback;
-			return wabt::Result::Ok;
-		} else {
-			PrintError(callback, "unknown host function import " PRIimport,
-					PRINTF_IMPORT_ARG(*import));
-			return wabt::Result::Error;
-		}
-	}
-
-	wabt::Result ImportTable(interp::TableImport* import, interp::Table* table,
-			const ErrorCallback& callback) override {
-		return wabt::Result::Error;
-	}
-
-	wabt::Result ImportMemory(interp::MemoryImport* import,
-			interp::Memory* memory, const ErrorCallback& callback) override {
-		return wabt::Result::Error;
-	}
-
-	wabt::Result ImportGlobal(interp::GlobalImport* import,
-			interp::Global* global, const ErrorCallback& callback) override {
-		return wabt::Result::Error;
-	}
-
-private:
-	static interp::Result PrintCallback(const HostFunc* func,
-			const interp::FuncSignature* sig, Index num_args, TypedValue* args,
-			Index num_results, TypedValue* out_results, void* user_data) {
-		memset(out_results, 0, sizeof(TypedValue) * num_results);
-		for (Index i = 0; i < num_results; ++i)
-			out_results[i].type = sig->result_types[i];
-
-		TypedValues vec_args(args, args + num_args);
-		TypedValues vec_results(out_results, out_results + num_results);
-
-		printf("called host ");
-		WriteCall(s_stdout_stream.get(), func->module_name, func->field_name,
-				vec_args, vec_results, interp::Result::Ok);
-		return interp::Result::Ok;
-	}
-
-	static interp::Result MyImportCallback(const HostFunc* func,
-			const interp::FuncSignature* sig, Index num_args, TypedValue* args,
-			Index num_results, TypedValue* out_results, void* user_data) {
-		memset(out_results, 0, sizeof(TypedValue) * num_results);
-		for (Index i = 0; i < num_results; ++i)
-			out_results[i].type = sig->result_types[i];
-
-		TypedValues vec_args(args, args + num_args);
-		TypedValues vec_results(out_results, out_results + num_results);
-
-		std::cout << "Called my import function with args: \r\n";
-		for (auto &res : vec_args) {
-			switch (res.type) {
-			case Type::I32:
-				std::cout << "import argument i32 " << res.value.i32 << "\r\n";
-				break;
-			default:
-				break;
-			}
-		}
-
-		WriteCall(s_stdout_stream.get(), func->module_name, func->field_name,
-				vec_args, vec_results, interp::Result::Ok);
-		return interp::Result::Ok;
-	}
-
-	static interp::Result RustUnwindCallback(const HostFunc* func,
-			const interp::FuncSignature* sig, Index num_args, TypedValue* args,
-			Index num_results, TypedValue* out_results, void* user_data) {
-		return interp::Result::Ok;
-	}
-
-	void PrintError(const ErrorCallback& callback, const char* format, ...) {
-		WABT_SNPRINTF_ALLOCA(buffer, length, format);
-		callback(buffer);
-	}
-};
-
 static void InitEnvironment(Environment* env) {
 	HostModule* host_module = env->AppendHostModule("env");
-	host_module->import_delegate.reset(new WasmInterpHostImportDelegate());
+	host_module->import_delegate.reset(new ImportDelegate());
 }
 
 static wabt::Result ReadAndRunModule(const char* module_filename) {

@@ -27,8 +27,8 @@ function build_wasm_as {
 
 function build_wasm_rust {
 	rustc $WASM_DIR/rust/hello.rs --target=wasm32-unknown-unknown -C panic=abort -o $WASM_DIR/rust/hello-rust.wasm
-	wasm-gc $WASM_DIR/rust/hello-rust.wasm $WASM_DIR/rust/hello-rust.wasm
-	#$WABT_BIN_DIR/wasm2wat $WASM_DIR/rust/hello.wasm -o $WASM_DIR/rust/hello-rust.wast
+#	wasm-gc $WASM_DIR/rust/hello-rust.wasm $WASM_DIR/rust/hello-rust.wasm
+	$WABT_BIN_DIR/wasm2wat $WASM_DIR/rust/hello-rust.wasm -o $WASM_DIR/rust/hello-rust.wast
 }
 
 

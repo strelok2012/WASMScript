@@ -3,8 +3,6 @@
 # input variables
 #
 
-#EMSCRIPTEN := 1
-
 ## output dirs and objects
 OUTPUT_DIR = build
 OUTPUT_BYTECODE = $(OUTPUT_DIR)/cpp.bc
@@ -12,6 +10,7 @@ OUTPUT_LLVM_IR = $(OUTPUT_DIR)/cpp.s
 
 OUTPUT_WAST = $(OUTPUT_DIR)/cpp.wast
 OUTPUT_WASM = $(OUTPUT_DIR)/cpp.wasm
+OUTPUT_WAST_FINAL = $(OUTPUT_DIR)/cpp.wast.final
 
 ## project root
 GLOBAL_ROOT := .
@@ -23,10 +22,6 @@ GLOBAL_CXXFLAGS ?= -Oz
 ## executables
 GLOBAL_MKDIR ?= mkdir -p
 GLOBAL_RM ?= rm -f
-
-EMSDK_DIR := ../../emsdk
-EMSDK_CLANG_DIR := $(EMSDK_DIR)/clang/e1.37.22_64bit
-EMSDK_EMSCRIPTEN_DIR := $(EMSDK_DIR)/emscripten/1.37.22
 
 LLVM_BIN_DIR ?= ../../llvm-build/bin
 BINARYEN_BIN_DIR ?= ../../binaryen/bin
@@ -61,38 +56,24 @@ INCLUDES := \
 	$(foreach dir,$(INCLUDES_DIRS),$(shell find $(GLOBAL_ROOT)/$(dir) -type d)) \
 	$(addprefix $(GLOBAL_ROOT)/,$(INCLUDES_OBJS))
 
-
-# build object list to compile
-ifndef EMSCRIPTEN
-
 OBJS := $(patsubst %.c,%.bc,$(patsubst %.cpp,%.bc,$(patsubst $(GLOBAL_ROOT)/%,$(OUTPUT_DIR)/%,$(SRCS))))
-LLVM_CFLAGS := -emit-llvm --target=wasm32 -fomit-frame-pointer -fno-threadsafe-statics -fno-stack-protector -fno-rtti -fno-exceptions -c
+
 CC := $(LLVM_BIN_DIR)/clang
 CPP := $(LLVM_BIN_DIR)/clang++
 LINK := $(LLVM_BIN_DIR)/llvm-link
 LLC := $(LLVM_BIN_DIR)/llc
 
-else
-
-OBJS := $(patsubst %.c,%.wasm,$(patsubst %.cpp,%.wasm,$(patsubst $(GLOBAL_ROOT)/%,$(OUTPUT_DIR)/%,$(SRCS))))
-LLVM_CFLAGS := 
-CC = $(EMSDK_CLANG_DIR)/clang
-CPP = $(EMSDK_CLANG_DIR)/clang++
-LINK = $(EMSDK_CLANG_DIR)/llvm-link
-LLC := $(EMSDK_CLANG_DIR)/llc
-
-endif
-
 # build directory list to create
 DIRS := $(sort $(dir $(OBJS)))
 
 # build compiler include flag list
-INPUT_CFLAGS := $(addprefix -I,$(INCLUDES))
+INPUT_CFLAGS := $(addprefix -I,$(INCLUDES)) \
+	-emit-llvm --target=wasm32 -fomit-frame-pointer -fno-threadsafe-statics -fno-stack-protector -fno-rtti -fno-exceptions
 
 # build compiler flag list
 
-CXXFLAGS := $(GLOBAL_CXXFLAGS) $(INPUT_CFLAGS) $(LLVM_CFLAGS) -std=c++14
-CFLAGS := $(GLOBAL_CFLAGS) $(INPUT_CFLAGS) $(LLVM_CFLAGS)
+CXXFLAGS := $(GLOBAL_CXXFLAGS) $(INPUT_CFLAGS) -std=c++14
+CFLAGS := $(GLOBAL_CFLAGS) $(INPUT_CFLAGS)
 
 
 .DEFAULT_GOAL := all
@@ -102,11 +83,11 @@ CFLAGS := $(GLOBAL_CFLAGS) $(INPUT_CFLAGS) $(LLVM_CFLAGS)
 
 # build cpp sources
 $(OUTPUT_DIR)/%.bc: $(GLOBAL_ROOT)/%.cpp
-	$(CPP) -MMD -MP -MF $(OUTPUT_DIR)/$*.d $(CXXFLAGS) $< -o $@
+	$(CPP) -MMD -MP -MF $(OUTPUT_DIR)/$*.d $(CXXFLAGS) -c $< -o $@
 
 # build c sources
 $(OUTPUT_DIR)/%.bc: $(GLOBAL_ROOT)/%.c
-	$(CC) -MMD -MP -MF $(OUTPUT_DIR)/$*.d $(CFLAGS) $< -o $@
+	$(CC) -MMD -MP -MF $(OUTPUT_DIR)/$*.d $(CFLAGS) -c $< -o $@
 
 # build llvm bytecode
 $(OUTPUT_BYTECODE): $(OBJS)
@@ -122,12 +103,15 @@ $(OUTPUT_WAST): $(OUTPUT_LLVM_IR)
 
 # encode wasm text AST to wasm binary form
 $(OUTPUT_WASM): $(OUTPUT_WAST)
-	$(WABT_BIN_DIR)/wat2wasm $< -o $@
+	$(BINARYEN_BIN_DIR)/wasm-as $< -o $@
 
-all: .prebuild $(OUTPUT_WASM)
+# encode wasm text AST to wasm binary form
+$(OUTPUT_WAST_FINAL): $(OUTPUT_WASM)
+	$(WABT_BIN_DIR)/wasm2wat $< -o $@
+
+all: .prebuild $(OUTPUT_WAST_FINAL)
 
 .prebuild:
-	@echo $(OBJS)
 	@$(GLOBAL_MKDIR) $(DIRS)
 
 clean:
