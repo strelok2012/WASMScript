@@ -1,6 +1,6 @@
 
 #include <iostream>
-
+/*
 #include "ImportDelegate.h"
 
 using namespace wabt;
@@ -88,4 +88,4 @@ void ImportDelegate::PrintError(const ErrorCallback& callback, const char* forma
 	WABT_SNPRINTF_ALLOCA(buffer, length, format);
 	callback(buffer);
 }
-
+*/

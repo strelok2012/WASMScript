@@ -2,7 +2,7 @@
 #ifndef EXEC_IMPORTDELEGATE_H_
 #define EXEC_IMPORTDELEGATE_H_
 
-#include "src/binary-reader-interp.h"
+/*#include "src/binary-reader-interp.h"
 #include "src/binary-reader.h"
 #include "src/cast.h"
 #include "src/error-handler.h"
@@ -49,6 +49,6 @@ private:
 			Index num_results, TypedValue* out_results, void* user_data);
 
 	void PrintError(const ErrorCallback& callback, const char* format, ...);
-};
+};*/
 
 #endif /* EXEC_IMPORTDELEGATE_H_ */

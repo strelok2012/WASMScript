@@ -16,8 +16,8 @@ OUTPUT_WAST_FINAL = $(OUTPUT_DIR)/cpp.wast.final
 GLOBAL_ROOT := .
 
 ## default cflags
-GLOBAL_CFLAGS ?= -Oz
-GLOBAL_CXXFLAGS ?= -Oz
+GLOBAL_CFLAGS ?= -Os
+GLOBAL_CXXFLAGS ?= -Os
 
 ## executables
 GLOBAL_MKDIR ?= mkdir -p

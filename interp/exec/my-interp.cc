@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <exec/ImportDelegate.h>
+#include "ImportDelegate.h"
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -25,7 +25,11 @@
 #include <vector>
 #include <iostream>
 
+#include <limits.h>
 
+#include "src/Module.h"
+
+/*
 using namespace wabt;
 using namespace wabt::interp;
 
@@ -100,7 +104,6 @@ static void RunExport(std::string exportName, interp::Module* module, Executor* 
 						args, exec_result.values, exec_result.result);
 			}
 		}
-
 	}
 }
 
@@ -160,8 +163,45 @@ int ProgramMain(int argc, char** argv) {
 
 	wabt::Result result = ReadAndRunModule(s_infile);
 	return result != wabt::Result::Ok;
+}*/
+
+
+void process_file_data(const char *filename, const uint8_t *data, size_t size) {
+	wasm::Module mod;
+
+	mod.init(data, size);
+}
+
+void read_file(const char *filename) {
+	char buf[PATH_MAX + 1] = { 0 };
+
+	FILE *fp;
+	fp = fopen(filename, "r");
+	if (fp) {
+		fseek(fp, 0, SEEK_END);
+		long int size = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		uint8_t buf[size];
+		if (fread(buf, size, 1, fp) == 1) {
+			process_file_data(filename, buf, size);
+		}
+
+		fclose(fp);
+	}
 }
 
 int main(int argc, char** argv) {
-	return ProgramMain(argc, argv);
+	char buf[PATH_MAX + 1] = { 0 };
+
+	char *cwd = nullptr;
+
+	if (argc > 1) {
+		cwd = realpath(argv[1], buf);
+	}
+
+	if (cwd) {
+		read_file(cwd);
+	}
+
+	return 0;
 }
