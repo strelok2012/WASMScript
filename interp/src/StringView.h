@@ -18,10 +18,10 @@
 #define WABT_STRING_VIEW_H_
 
 #include <cassert>
-#include <functional>
 #include <iterator>
-#include <string>
 #include <limits>
+
+#include "Std.h"
 
 namespace wasm {
 
@@ -56,6 +56,7 @@ public:
 	constexpr StringView(const StringView&) noexcept = default;
 	StringView& operator=(const StringView&) noexcept = default;
 	StringView(const char* str);
+	StringView(const String &);
 	constexpr StringView(const char* str, size_type len);
 
 	// iterator support
@@ -151,6 +152,8 @@ inline constexpr StringView::StringView() noexcept : _data(nullptr), _size(0) { 
 
 inline StringView::StringView(const char* str) : _data(str), _size(traits_type::length(str)) { }
 
+inline StringView::StringView(const String &str) : _data(str.data()), _size(str.size()) { }
+
 inline constexpr StringView::StringView(const char* str, size_type len) : _data(str), _size(len) { }
 
 inline constexpr StringView::const_iterator StringView::begin() const noexcept {
@@ -218,6 +221,11 @@ inline StringView::const_reference StringView::back() const {
 
 constexpr inline StringView::const_pointer StringView::data() const noexcept {
 	return _data;
+}
+
+inline std::basic_ostream<char> &
+operator << (std::basic_ostream<char> & os, const StringView & str) {
+	return os.write(str.data(), str.size());
 }
 
 } // namespace wasm

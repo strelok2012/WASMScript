@@ -175,14 +175,6 @@ bool Opcode::IsEnabled(const Features& features) const {
 	case Opcode::I64AtomicRmw32UCmpxchg:
 		return features.isThreadsEnabled();
 
-		// Interpreter opcodes are never "enabled".
-	case Opcode::InterpAlloca:
-	case Opcode::InterpBrUnless:
-	case Opcode::InterpCallHost:
-	case Opcode::InterpData:
-	case Opcode::InterpDropKeep:
-		return false;
-
 	default:
 		return true;
 	}

@@ -3,29 +3,16 @@
 #define SRC_UTILS_H_
 
 #include <stddef.h>
-#include <cstdint>
 #include <type_traits>
-#include <vector>
 #include <assert.h>
-#include <sstream>
+#include <string.h>
 
+#include "Std.h"
 #include "StringView.h"
 
 #define WASM_ASSERT(val) assert(val)
 
 namespace wasm {
-
-template <typename T>
-using Vector = std::vector<T>;
-
-template <typename T>
-using Function = std::function<T>;
-
-using String = std::string;
-using StringStream = std::ostringstream;
-
-class Module;
-struct Func;
 
 enum class Result {
 	Ok,
@@ -43,9 +30,9 @@ using Index = uint32_t;    // An index into one of the many index spaces.
 using Address = uint32_t;  // An address or size in linear memory.
 using Offset = size_t;     // An offset into a host's file or memory buffer.
 
-static constexpr Address kInvalidAddress = ~0;
-static constexpr Index kInvalidIndex = ~0;
-static constexpr Offset kInvalidOffset = ~0;
+static constexpr Address kInvalidAddress = Address(~0);
+static constexpr Index kInvalidIndex = Index(~0);
+static constexpr Offset kInvalidOffset = Offset(~0);
 
 static constexpr auto WABT_PAGE_SIZE = 0x10000; /* 64k */
 static constexpr auto WABT_MAX_PAGES = 0x10000; /* # of pages that fit in 32-bit address space */
@@ -162,7 +149,6 @@ struct ReadOptions {
 	: features(features), read_debug_names(read_debug_names), stop_on_first_error(stop_on_first_error) { }
 
 	Features features;
-	//Stream* log_stream = nullptr;
 	bool read_debug_names = false;
 	bool stop_on_first_error = true;
 };
@@ -185,6 +171,20 @@ union Value {
 	uint64_t i64;
 	ValueTypeRep<float> f32_bits;
 	ValueTypeRep<double> f64_bits;
+
+	Value() = default;
+	Value(const Value &) = default;
+	Value &operator=(const Value &) = default;
+
+	Value(uint32_t value) : i32(value) { }
+	Value(uint64_t value) : i64(value) { }
+	Value(int32_t value) { memcpy(&i32, &value, sizeof(int32_t)); }
+	Value(int64_t value) { memcpy(&i64, &value, sizeof(int64_t)); }
+	Value(float value) { memcpy(&f32_bits, &value, sizeof(float)); }
+	Value(double value) { memcpy(&f64_bits, &value, sizeof(double)); }
+
+	float asFloat() { float ret; memcpy(&ret, &f32_bits, sizeof(float)); return ret; }
+	double asDouble() { double ret; memcpy(&ret, &f64_bits, sizeof(double)); return ret; }
 };
 
 struct TypedValue {
@@ -196,20 +196,7 @@ struct TypedValue {
 	Value value;
 };
 
-typedef std::vector<TypedValue> TypedValues;
-
-
-// Returns the length of the leb128.
-Offset U32Leb128Length(uint32_t value);
-
-Offset WriteFixedU32Leb128Raw(uint8_t* data, uint8_t* end, uint32_t value);
-
-// Returns the length of the leb128.
-size_t ReadU32Leb128(const uint8_t* p, const uint8_t* end, uint32_t* out_value);
-size_t ReadS32Leb128(const uint8_t* p, const uint8_t* end, uint32_t* out_value);
-size_t ReadS64Leb128(const uint8_t* p, const uint8_t* end, uint64_t* out_value);
-
-bool IsValidUtf8(const char* s, size_t length);
+using TypedValues = Vector<TypedValue> ;
 
 }  // namespace wasm
 

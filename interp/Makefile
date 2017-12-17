@@ -5,6 +5,14 @@
 
 ## output dirs and objects
 OUTPUT_DIR := build
+OUTPUT_TEST := build
+
+BINARYEN_BIN ?= ../binaryen/bin
+WABT_BIN ?= ../wabt/bin
+
+WASM_AS ?= $(BINARYEN_BIN)/wasm-as
+WAT2WASM ?= $(WABT_BIN)/wat2wasm
+WASM2WAT ?= $(WABT_BIN)/wasm2wat
 
 ifndef RELEASE
 OUTPUT_DIR := $(OUTPUT_DIR)/debug
@@ -98,6 +106,16 @@ LIB_INPUT_CFLAGS := $(addprefix -I,$(LIB_INCLUDES))
 BUILD_CXXFLAGS := $(GLOBAL_CXXFLAGS) $(LIB_INPUT_CFLAGS) $(CFLAGS) $(CPPFLAGS)
 BUILD_CFLAGS := $(GLOBAL_CFLAGS) $(LIB_INPUT_CFLAGS) $(CFLAGS)
 
+TEST_WAST := $(shell find $(GLOBAL_ROOT)/test -name '*.wast')
+TEST_WASM := $(patsubst $(GLOBAL_ROOT)/%.wast,$(OUTPUT_TEST)/%.wasm,$(TEST_WAST))
+
+TEST_WABT_WAST := $(shell find $(GLOBAL_ROOT)/test -name '*.wat')
+TEST_WABT_WASM := $(patsubst $(GLOBAL_ROOT)/%.wat,$(OUTPUT_TEST)/%.wasm,$(TEST_WABT_WAST))
+
+TEST_ASSERT := $(patsubst $(GLOBAL_ROOT)/%,$(OUTPUT_TEST)/%,$(shell find $(GLOBAL_ROOT)/test -name '*.assert'))
+
+TEST_WAT := $(patsubst $(OUTPUT_TEST)/%.wasm,$(OUTPUT_TEST)/%.wat,$(TEST_WABT_WASM) $(TEST_WASM))
+
 .DEFAULT_GOAL := all
 
 # include sources dependencies
@@ -122,12 +140,26 @@ $(OUTPUT_LIB): $(LIB_OBJS)
 $(OUTPUT_EXEC): $(LIB_OBJS) $(EXEC_OBJS)
 	$(GLOBAL_CPP) $(LIB_OBJS) $(EXEC_OBJS) -o $(OUTPUT_EXEC)
 
-all: .prebuild $(OUTPUT_EXEC)
+$(OUTPUT_TEST)/%.wasm: %.wast
+	$(WASM_AS) -o $@ $<
+
+$(OUTPUT_TEST)/%.wasm: %.wat
+	$(WAT2WASM) -o $@ $<
+
+$(OUTPUT_TEST)/%.wat: $(OUTPUT_TEST)/%.wasm
+	$(WASM2WAT) -o $@ $<
+
+$(OUTPUT_TEST)/%.assert: %.assert
+	cp -f $< $@ 
+
+test: $(TEST_WASM) $(TEST_WABT_WASM) $(TEST_WAT) $(TEST_ASSERT)
+
+all: .prebuild $(OUTPUT_EXEC) test
 
 .prebuild:
-	@$(GLOBAL_MKDIR) $(LIB_DIRS) $(EXEC_DIRS)
+	@$(GLOBAL_MKDIR) $(LIB_DIRS) $(EXEC_DIRS) $(OUTPUT_TEST)/test
 
 clean:
-	$(GLOBAL_RM) -r $(OUTPUT_DIR)
+	$(GLOBAL_RM) -r $(OUTPUT_DIR) $(OUTPUT_TEST)/test
 
-.PHONY: all prebuild clean
+.PHONY: all prebuild clean test

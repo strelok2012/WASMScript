@@ -6,113 +6,113 @@ namespace wasm {
 
 
 /* Names section */
-Result SourceReader::BeginNamesSection(Offset size) {
+Result ModuleReader::BeginNamesSection(Offset size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnFunctionNameSubsection(Index index, uint32_t name_type, Offset subsection_size) {
+Result ModuleReader::OnFunctionNameSubsection(Index index, uint32_t name_type, Offset subsection_size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnFunctionNamesCount(Index num_functions) {
+Result ModuleReader::OnFunctionNamesCount(Index num_functions) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnFunctionName(Index function_index, StringView function_name) {
+Result ModuleReader::OnFunctionName(Index function_index, StringView function_name) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnLocalNameSubsection(Index index, uint32_t name_type, Offset subsection_size) {
+Result ModuleReader::OnLocalNameSubsection(Index index, uint32_t name_type, Offset subsection_size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnLocalNameFunctionCount(Index num_functions) {
+Result ModuleReader::OnLocalNameFunctionCount(Index num_functions) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnLocalNameLocalCount(Index function_index, Index num_locals) {
+Result ModuleReader::OnLocalNameLocalCount(Index function_index, Index num_locals) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnLocalName(Index function_index, Index local_index, StringView local_name) {
+Result ModuleReader::OnLocalName(Index function_index, Index local_index, StringView local_name) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::EndNamesSection() {
+Result ModuleReader::EndNamesSection() {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
 
 /* Reloc section */
-Result SourceReader::BeginRelocSection(Offset size) {
+Result ModuleReader::BeginRelocSection(Offset size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnRelocCount(Index count, BinarySection section_code, StringView section_name) {
+Result ModuleReader::OnRelocCount(Index count, BinarySection section_code, StringView section_name) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnReloc(RelocType type, Offset offset, Index index, uint32_t addend) {
+Result ModuleReader::OnReloc(RelocType type, Offset offset, Index index, uint32_t addend) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::EndRelocSection() {
+Result ModuleReader::EndRelocSection() {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
 
 /* Linking section */
-Result SourceReader::BeginLinkingSection(Offset size) {
+Result ModuleReader::BeginLinkingSection(Offset size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnStackGlobal(Index stack_global) {
+Result ModuleReader::OnStackGlobal(Index stack_global) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnSymbolInfoCount(Index count) {
+Result ModuleReader::OnSymbolInfoCount(Index count) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnSymbolInfo(StringView name, uint32_t flags) {
+Result ModuleReader::OnSymbolInfo(StringView name, uint32_t flags) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnDataSize(uint32_t data_size) {
+Result ModuleReader::OnDataSize(uint32_t data_size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnDataAlignment(uint32_t data_alignment) {
+Result ModuleReader::OnDataAlignment(uint32_t data_alignment) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnSegmentInfoCount(Index count) {
+Result ModuleReader::OnSegmentInfoCount(Index count) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnSegmentInfo(Index index, StringView name, uint32_t alignment, uint32_t flags) {
+Result ModuleReader::OnSegmentInfo(Index index, StringView name, uint32_t alignment, uint32_t flags) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::EndLinkingSection() {
+Result ModuleReader::EndLinkingSection() {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
 
 /* Exception section */
-Result SourceReader::BeginExceptionSection(Offset size) {
+Result ModuleReader::BeginExceptionSection(Offset size) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnExceptionCount(Index count) {
+Result ModuleReader::OnExceptionCount(Index count) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::OnExceptionType(Index index, TypeVector& sig) {
+Result ModuleReader::OnExceptionType(Index index, TypeVector& sig) {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }
-Result SourceReader::EndExceptionSection() {
+Result ModuleReader::EndExceptionSection() {
 	printf("%s\n", __FUNCTION__);
 	return Result::Ok;
 }

@@ -21,8 +21,276 @@
 #include <iomanip>
 #include "Binary.h"
 #include "Module.h"
+#include "Environment.h"
+
+constexpr auto MAX_U32_LEB128_BYTES = 5;
+constexpr auto MAX_U64_LEB128_BYTES = 10;
 
 namespace wasm {
+
+Offset U32Leb128Length(uint32_t value) {
+	uint32_t size = 0;
+	do {
+		value >>= 7;
+		size++;
+	} while (value != 0);
+	return size;
+}
+
+#define LEB128_LOOP_UNTIL(end_cond) \
+  do {                              \
+    uint8_t byte = value & 0x7f;    \
+    value >>= 7;                    \
+    if (end_cond) {                 \
+      data[length++] = byte;        \
+      break;                        \
+    } else {                        \
+      data[length++] = byte | 0x80; \
+    }                               \
+  } while (1)
+
+Offset WriteFixedU32Leb128Raw(uint8_t* data, uint8_t* end, uint32_t value) {
+	if (end - data < MAX_U32_LEB128_BYTES) {
+		return 0;
+	}
+	data[0] = (value & 0x7f) | 0x80;
+	data[1] = ((value >> 7) & 0x7f) | 0x80;
+	data[2] = ((value >> 14) & 0x7f) | 0x80;
+	data[3] = ((value >> 21) & 0x7f) | 0x80;
+	data[4] = ((value >> 28) & 0x0f);
+	return MAX_U32_LEB128_BYTES;
+}
+
+#undef LEB128_LOOP_UNTIL
+
+#define BYTE_AT(type, i, shift) ((static_cast<type>(p[i]) & 0x7f) << (shift))
+
+#define LEB128_1(type) (BYTE_AT(type, 0, 0))
+#define LEB128_2(type) (BYTE_AT(type, 1, 7) | LEB128_1(type))
+#define LEB128_3(type) (BYTE_AT(type, 2, 14) | LEB128_2(type))
+#define LEB128_4(type) (BYTE_AT(type, 3, 21) | LEB128_3(type))
+#define LEB128_5(type) (BYTE_AT(type, 4, 28) | LEB128_4(type))
+#define LEB128_6(type) (BYTE_AT(type, 5, 35) | LEB128_5(type))
+#define LEB128_7(type) (BYTE_AT(type, 6, 42) | LEB128_6(type))
+#define LEB128_8(type) (BYTE_AT(type, 7, 49) | LEB128_7(type))
+#define LEB128_9(type) (BYTE_AT(type, 8, 56) | LEB128_8(type))
+#define LEB128_10(type) (BYTE_AT(type, 9, 63) | LEB128_9(type))
+
+#define SHIFT_AMOUNT(type, sign_bit) (sizeof(type) * 8 - 1 - (sign_bit))
+#define SIGN_EXTEND(type, value, sign_bit)                       \
+  (static_cast<type>((value) << SHIFT_AMOUNT(type, sign_bit)) >> \
+   SHIFT_AMOUNT(type, sign_bit))
+
+size_t ReadU32Leb128(const uint8_t* p, const uint8_t* end, uint32_t* out_value) {
+	if (p < end && (p[0] & 0x80) == 0) {
+		*out_value = LEB128_1(uint32_t);
+		return 1;
+	} else if (p + 1 < end && (p[1] & 0x80) == 0) {
+		*out_value = LEB128_2(uint32_t);
+		return 2;
+	} else if (p + 2 < end && (p[2] & 0x80) == 0) {
+		*out_value = LEB128_3(uint32_t);
+		return 3;
+	} else if (p + 3 < end && (p[3] & 0x80) == 0) {
+		*out_value = LEB128_4(uint32_t);
+		return 4;
+	} else if (p + 4 < end && (p[4] & 0x80) == 0) {
+		// The top bits set represent values > 32 bits.
+		if (p[4] & 0xf0) {
+			return 0;
+		}
+		*out_value = LEB128_5(uint32_t);
+		return 5;
+	} else {
+		// past the end.
+		*out_value = 0;
+		return 0;
+	}
+}
+
+size_t ReadS32Leb128(const uint8_t* p, const uint8_t* end, uint32_t* out_value) {
+	if (p < end && (p[0] & 0x80) == 0) {
+		uint32_t result = LEB128_1(uint32_t);
+		*out_value = SIGN_EXTEND(int32_t, result, 6);
+		return 1;
+	} else if (p + 1 < end && (p[1] & 0x80) == 0) {
+		uint32_t result = LEB128_2(uint32_t);
+		*out_value = SIGN_EXTEND(int32_t, result, 13);
+		return 2;
+	} else if (p + 2 < end && (p[2] & 0x80) == 0) {
+		uint32_t result = LEB128_3(uint32_t);
+		*out_value = SIGN_EXTEND(int32_t, result, 20);
+		return 3;
+	} else if (p + 3 < end && (p[3] & 0x80) == 0) {
+		uint32_t result = LEB128_4(uint32_t);
+		*out_value = SIGN_EXTEND(int32_t, result, 27);
+		return 4;
+	} else if (p + 4 < end && (p[4] & 0x80) == 0) {
+		// The top bits should be a sign-extension of the sign bit.
+		bool sign_bit_set = (p[4] & 0x8);
+		int top_bits = p[4] & 0xf0;
+		if ((sign_bit_set && top_bits != 0x70)
+				|| (!sign_bit_set && top_bits != 0)) {
+			return 0;
+		}
+		uint32_t result = LEB128_5(uint32_t);
+		*out_value = result;
+		return 5;
+	} else {
+		// Past the end.
+		return 0;
+	}
+}
+
+size_t ReadS64Leb128(const uint8_t* p, const uint8_t* end, uint64_t* out_value) {
+	if (p < end && (p[0] & 0x80) == 0) {
+		uint64_t result = LEB128_1(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 6);
+		return 1;
+	} else if (p + 1 < end && (p[1] & 0x80) == 0) {
+		uint64_t result = LEB128_2(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 13);
+		return 2;
+	} else if (p + 2 < end && (p[2] & 0x80) == 0) {
+		uint64_t result = LEB128_3(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 20);
+		return 3;
+	} else if (p + 3 < end && (p[3] & 0x80) == 0) {
+		uint64_t result = LEB128_4(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 27);
+		return 4;
+	} else if (p + 4 < end && (p[4] & 0x80) == 0) {
+		uint64_t result = LEB128_5(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 34);
+		return 5;
+	} else if (p + 5 < end && (p[5] & 0x80) == 0) {
+		uint64_t result = LEB128_6(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 41);
+		return 6;
+	} else if (p + 6 < end && (p[6] & 0x80) == 0) {
+		uint64_t result = LEB128_7(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 48);
+		return 7;
+	} else if (p + 7 < end && (p[7] & 0x80) == 0) {
+		uint64_t result = LEB128_8(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 55);
+		return 8;
+	} else if (p + 8 < end && (p[8] & 0x80) == 0) {
+		uint64_t result = LEB128_9(uint64_t);
+		*out_value = SIGN_EXTEND(int64_t, result, 62);
+		return 9;
+	} else if (p + 9 < end && (p[9] & 0x80) == 0) {
+		// The top bits should be a sign-extension of the sign bit.
+		bool sign_bit_set = (p[9] & 0x1);
+		int top_bits = p[9] & 0xfe;
+		if ((sign_bit_set && top_bits != 0x7e)
+				|| (!sign_bit_set && top_bits != 0)) {
+			return 0;
+		}
+		uint64_t result = LEB128_10(uint64_t);
+		*out_value = result;
+		return 10;
+	} else {
+		// Past the end.
+		return 0;
+	}
+}
+
+#undef BYTE_AT
+#undef LEB128_1
+#undef LEB128_2
+#undef LEB128_3
+#undef LEB128_4
+#undef LEB128_5
+#undef LEB128_6
+#undef LEB128_7
+#undef LEB128_8
+#undef LEB128_9
+#undef LEB128_10
+#undef SHIFT_AMOUNT
+#undef SIGN_EXTEND
+
+
+namespace {
+
+const int s_utf8_length[256] = {
+//  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x00
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x10
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x20
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x30
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x40
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x50
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x60
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // 0x70
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 0x80
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 0x90
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 0xa0
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 0xb0
+	0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,  // 0xc0
+	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,  // 0xd0
+	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,  // 0xe0
+	4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 0xf0
+};
+
+// Returns true if this is a valid continuation byte.
+bool IsCont(uint8_t c) {
+	return (c & 0xc0) == 0x80;
+}
+
+}  // end anonymous namespace
+
+bool IsValidUtf8(const char* s, size_t s_length) {
+	const uint8_t* p = reinterpret_cast<const uint8_t*>(s);
+	const uint8_t* end = p + s_length;
+	while (p < end) {
+		uint8_t cu0 = *p;
+		int length = s_utf8_length[cu0];
+		if (p + length > end) {
+			return false;
+		}
+
+		switch (length) {
+		case 0:
+			return false;
+
+		case 1:
+			p++;
+			break;
+
+		case 2:
+			p++;
+			if (!IsCont(*p++)) {
+				return false;
+			}
+			break;
+
+		case 3: {
+			p++;
+			uint8_t cu1 = *p++;
+			uint8_t cu2 = *p++;
+			if (!(IsCont(cu1) && IsCont(cu2)) || (cu0 == 0xe0 && cu1 < 0xa0) || // Overlong encoding.
+					(cu0 == 0xed && cu1 >= 0xa0))   // UTF-16 surrogate halves.
+				return false;
+			break;
+		}
+
+		case 4: {
+			p++;
+			uint8_t cu1 = *p++;
+			uint8_t cu2 = *p++;
+			uint8_t cu3 = *p++;
+			if (!(IsCont(cu1) && IsCont(cu2) && IsCont(cu3))
+					|| (cu0 == 0xf0 && cu1 < 0x90) ||  // Overlong encoding.
+					(cu0 == 0xf4 && cu1 >= 0x90))   // Code point >= 0x11000.
+				return false;
+			break;
+		}
+		}
+	}
+	return true;
+}
+
 
 template <typename E>
 constexpr typename std::underlying_type<E>::type toInt(const E &e) {
@@ -108,9 +376,9 @@ constexpr auto WABT_DEFAULT_SNPRINTF_ALLOCA_BUFSIZE = 256;
 #define CALLBACK0(member) ERROR_UNLESS(Succeeded(_delegate->member()), #member " callback failed")
 #define CALLBACK(member, ...) ERROR_UNLESS(Succeeded(_delegate->member(__VA_ARGS__)), #member " callback failed")
 
-class SourceReader::BinaryReader {
+class ModuleReader::BinaryReader {
 public:
-	BinaryReader(SourceReader * delegate, const ReadOptions* options);
+	BinaryReader(ModuleReader * delegate, const ReadOptions* options);
 
 	Result ReadModule();
 
@@ -171,9 +439,9 @@ private:
 
 	size_t _read_end = 0; // Either the section end or data_size.
 	ReaderState *_state = nullptr;
-	SourceReader* _delegate = nullptr;
+	ModuleReader* _delegate = nullptr;
 	TypeVector _param_types;
-	std::vector<Index> _target_depths;
+	Vector<Index> _target_depths;
 	const ReadOptions* _options = nullptr;
 	BinarySection _last_known_section = BinarySection::Invalid;
 
@@ -193,7 +461,7 @@ private:
 	Index _num_exceptions = 0;
 };
 
-SourceReader::BinaryReader::BinaryReader(SourceReader* delegate, const ReadOptions* options)
+ModuleReader::BinaryReader::BinaryReader(ModuleReader* delegate, const ReadOptions* options)
 : _read_end(delegate->_state.size)
 , _delegate(delegate)
 , _options(options)
@@ -202,14 +470,14 @@ SourceReader::BinaryReader::BinaryReader(SourceReader* delegate, const ReadOptio
 }
 
 template <typename Callback>
-void SourceReader::BinaryReader::PushErrorStream(const Callback &cb) {
+void ModuleReader::BinaryReader::PushErrorStream(const Callback &cb) {
 	StringStream stream;
 	cb(stream);
 
 	_delegate->OnError(stream);
 }
 
-Result SourceReader::BinaryReader::ReportUnexpectedOpcode(Opcode opcode,
+Result ModuleReader::BinaryReader::ReportUnexpectedOpcode(Opcode opcode,
 		const char* message) {
 	const char* maybe_space = " ";
 	if (!message) {
@@ -228,7 +496,7 @@ Result SourceReader::BinaryReader::ReportUnexpectedOpcode(Opcode opcode,
 	return Result::Error;
 }
 
-Result SourceReader::BinaryReader::ReadOpcode(Opcode* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadOpcode(Opcode* out_value, const char* desc) {
 	uint8_t value = 0;
 	CHECK_RESULT(ReadU8(&value, desc));
 
@@ -243,7 +511,7 @@ Result SourceReader::BinaryReader::ReadOpcode(Opcode* out_value, const char* des
 }
 
 template<typename T>
-Result SourceReader::BinaryReader::ReadT(T* out_value, const char* type_name, const char* desc) {
+Result ModuleReader::BinaryReader::ReadT(T* out_value, const char* type_name, const char* desc) {
 	if (_state->offset + sizeof(T) > _read_end) {
 		PushErrorStream([&] (StringStream &stream) {
 			stream << "unable to read " << type_name << ": " << desc;
@@ -255,23 +523,23 @@ Result SourceReader::BinaryReader::ReadT(T* out_value, const char* type_name, co
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadU8(uint8_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadU8(uint8_t* out_value, const char* desc) {
 	return ReadT(out_value, "uint8_t", desc);
 }
 
-Result SourceReader::BinaryReader::ReadU32(uint32_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadU32(uint32_t* out_value, const char* desc) {
 	return ReadT(out_value, "uint32_t", desc);
 }
 
-Result SourceReader::BinaryReader::ReadF32(uint32_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadF32(uint32_t* out_value, const char* desc) {
 	return ReadT(out_value, "float", desc);
 }
 
-Result SourceReader::BinaryReader::ReadF64(uint64_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadF64(uint64_t* out_value, const char* desc) {
 	return ReadT(out_value, "double", desc);
 }
 
-Result SourceReader::BinaryReader::ReadU32Leb128(uint32_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadU32Leb128(uint32_t* out_value, const char* desc) {
 	const uint8_t* p = _state->data + _state->offset;
 	const uint8_t* end = _state->data + _read_end;
 	size_t bytes_read = wasm::ReadU32Leb128(p, end, out_value);
@@ -280,7 +548,7 @@ Result SourceReader::BinaryReader::ReadU32Leb128(uint32_t* out_value, const char
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadS32Leb128(uint32_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadS32Leb128(uint32_t* out_value, const char* desc) {
 	const uint8_t* p = _state->data + _state->offset;
 	const uint8_t* end = _state->data + _read_end;
 	size_t bytes_read = wasm::ReadS32Leb128(p, end, out_value);
@@ -289,7 +557,7 @@ Result SourceReader::BinaryReader::ReadS32Leb128(uint32_t* out_value, const char
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadS64Leb128(uint64_t* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadS64Leb128(uint64_t* out_value, const char* desc) {
 	const uint8_t* p = _state->data + _state->offset;
 	const uint8_t* end = _state->data + _read_end;
 	size_t bytes_read = wasm::ReadS64Leb128(p, end, out_value);
@@ -298,7 +566,7 @@ Result SourceReader::BinaryReader::ReadS64Leb128(uint64_t* out_value, const char
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadType(Type* out_value, const char* desc) {
+Result ModuleReader::BinaryReader::ReadType(Type* out_value, const char* desc) {
 	uint32_t type = 0;
 	CHECK_RESULT(ReadS32Leb128(&type, desc));
 	// Must be in the vs7 range: [-128, 127).
@@ -307,7 +575,7 @@ Result SourceReader::BinaryReader::ReadType(Type* out_value, const char* desc) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadStr(StringView* out_str, const char* desc) {
+Result ModuleReader::BinaryReader::ReadStr(StringView* out_str, const char* desc) {
 	uint32_t str_len = 0;
 	CHECK_RESULT(ReadU32Leb128(&str_len, "string length"));
 
@@ -318,7 +586,7 @@ Result SourceReader::BinaryReader::ReadStr(StringView* out_str, const char* desc
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadBytes(const void** out_data, Address* out_data_size, const char* desc) {
+Result ModuleReader::BinaryReader::ReadBytes(const void** out_data, Address* out_data_size, const char* desc) {
 	uint32_t data_size = 0;
 	CHECK_RESULT(ReadU32Leb128(&data_size, "data size"));
 
@@ -330,14 +598,14 @@ Result SourceReader::BinaryReader::ReadBytes(const void** out_data, Address* out
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadIndex(Index* index, const char* desc) {
+Result ModuleReader::BinaryReader::ReadIndex(Index* index, const char* desc) {
 	uint32_t value;
 	CHECK_RESULT(ReadU32Leb128(&value, desc));
 	*index = value;
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadOffset(Offset* offset, const char* desc) {
+Result ModuleReader::BinaryReader::ReadOffset(Offset* offset, const char* desc) {
 	uint32_t value;
 	CHECK_RESULT(ReadU32Leb128(&value, desc));
 	*offset = value;
@@ -365,27 +633,27 @@ static bool is_inline_sig_type(Type type) {
 	return is_concrete_type(type) || type == Type::Void;
 }
 
-Index SourceReader::BinaryReader::NumTotalFuncs() {
+Index ModuleReader::BinaryReader::NumTotalFuncs() {
 	return _num_func_imports + _num_function_signatures;
 }
 
-Index SourceReader::BinaryReader::NumTotalTables() {
+Index ModuleReader::BinaryReader::NumTotalTables() {
 	return _num_table_imports + _num_tables;
 }
 
-Index SourceReader::BinaryReader::NumTotalMemories() {
+Index ModuleReader::BinaryReader::NumTotalMemories() {
 	return _num_memory_imports + _num_memories;
 }
 
-Index SourceReader::BinaryReader::NumTotalGlobals() {
+Index ModuleReader::BinaryReader::NumTotalGlobals() {
 	return _num_global_imports + _num_globals;
 }
 
-Result SourceReader::BinaryReader::ReadI32InitExpr(Index index) {
+Result ModuleReader::BinaryReader::ReadI32InitExpr(Index index) {
 	return ReadInitExpr(index, true);
 }
 
-Result SourceReader::BinaryReader::ReadInitExpr(Index index, bool require_i32) {
+Result ModuleReader::BinaryReader::ReadInitExpr(Index index, bool require_i32) {
 	Opcode opcode;
 	CHECK_RESULT(ReadOpcode(&opcode, "opcode"));
 
@@ -443,7 +711,7 @@ Result SourceReader::BinaryReader::ReadInitExpr(Index index, bool require_i32) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadTable(Type* out_elem_type, Limits* out_elem_limits) {
+Result ModuleReader::BinaryReader::ReadTable(Type* out_elem_type, Limits* out_elem_limits) {
 	CHECK_RESULT(ReadType(out_elem_type, "table elem type"));
 	ERROR_UNLESS(*out_elem_type == Type::Anyfunc, "table elem type must by anyfunc");
 
@@ -466,7 +734,7 @@ Result SourceReader::BinaryReader::ReadTable(Type* out_elem_type, Limits* out_el
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadMemory(Limits* out_page_limits) {
+Result ModuleReader::BinaryReader::ReadMemory(Limits* out_page_limits) {
 	uint32_t flags;
 	uint32_t initial;
 	uint32_t max = 0;
@@ -489,7 +757,7 @@ Result SourceReader::BinaryReader::ReadMemory(Limits* out_page_limits) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadGlobalHeader(Type* out_type, bool* out_mutable) {
+Result ModuleReader::BinaryReader::ReadGlobalHeader(Type* out_type, bool* out_mutable) {
 	Type global_type = Type::Void;
 	uint8_t mutable_ = 0;
 	CHECK_RESULT(ReadType(&global_type, "global type"));
@@ -503,16 +771,14 @@ Result SourceReader::BinaryReader::ReadGlobalHeader(Type* out_type, bool* out_mu
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
+Result ModuleReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 	bool seen_end_opcode = false;
 	while (_state->offset < end_offset) {
 		Opcode opcode;
 		CHECK_RESULT(ReadOpcode(&opcode, "opcode"));
-		CALLBACK(OnOpcode, opcode);
 		switch (opcode) {
 		case Opcode::Unreachable:
 			CALLBACK0(OnUnreachableExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Block: {
@@ -522,7 +788,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 					"expected valid block signature type");
 			Index num_types = sig_type == Type::Void ? 0 : 1;
 			CALLBACK(OnBlockExpr, num_types, &sig_type);
-			CALLBACK(OnOpcodeBlockSig, num_types, &sig_type);
 			break;
 		}
 
@@ -533,7 +798,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 					"expected valid block signature type");
 			Index num_types = sig_type == Type::Void ? 0 : 1;
 			CALLBACK(OnLoopExpr, num_types, &sig_type);
-			CALLBACK(OnOpcodeBlockSig, num_types, &sig_type);
 			break;
 		}
 
@@ -544,25 +808,21 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 					"expected valid block signature type");
 			Index num_types = sig_type == Type::Void ? 0 : 1;
 			CALLBACK(OnIfExpr, num_types, &sig_type);
-			CALLBACK(OnOpcodeBlockSig, num_types, &sig_type);
 			break;
 		}
 
 		case Opcode::Else:
 			CALLBACK0(OnElseExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Select:
 			CALLBACK0(OnSelectExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Br: {
 			Index depth;
 			CHECK_RESULT(ReadIndex(&depth, "br depth"));
 			CALLBACK(OnBrExpr, depth);
-			CALLBACK(OnOpcodeIndex, depth);
 			break;
 		}
 
@@ -570,7 +830,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index depth;
 			CHECK_RESULT(ReadIndex(&depth, "br_if depth"));
 			CALLBACK(OnBrIfExpr, depth);
-			CALLBACK(OnOpcodeIndex, depth);
 			break;
 		}
 
@@ -586,12 +845,9 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			}
 
 			Index default_target_depth;
-			CHECK_RESULT(
-					ReadIndex(&default_target_depth,
-							"br_table default target depth"));
+			CHECK_RESULT( ReadIndex(&default_target_depth, "br_table default target depth"));
 
-			Index* target_depths =
-					num_targets ? _target_depths.data() : nullptr;
+			Index* target_depths = num_targets ? _target_depths.data() : nullptr;
 
 			CALLBACK(OnBrTableExpr, num_targets, target_depths,
 					default_target_depth);
@@ -600,17 +856,13 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 
 		case Opcode::Return:
 			CALLBACK0(OnReturnExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Nop:
-			CALLBACK0(OnNopExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Drop:
 			CALLBACK0(OnDropExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::End:
@@ -626,7 +878,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			uint32_t value;
 			CHECK_RESULT(ReadS32Leb128(&value, "i32.const value"));
 			CALLBACK(OnI32ConstExpr, value);
-			CALLBACK(OnOpcodeUint32, value);
 			break;
 		}
 
@@ -634,7 +885,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			uint64_t value;
 			CHECK_RESULT(ReadS64Leb128(&value, "i64.const value"));
 			CALLBACK(OnI64ConstExpr, value);
-			CALLBACK(OnOpcodeUint64, value);
 			break;
 		}
 
@@ -642,7 +892,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			uint32_t value_bits = 0;
 			CHECK_RESULT(ReadF32(&value_bits, "f32.const value"));
 			CALLBACK(OnF32ConstExpr, value_bits);
-			CALLBACK(OnOpcodeF32, value_bits);
 			break;
 		}
 
@@ -650,7 +899,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			uint64_t value_bits = 0;
 			CHECK_RESULT(ReadF64(&value_bits, "f64.const value"));
 			CALLBACK(OnF64ConstExpr, value_bits);
-			CALLBACK(OnOpcodeF64, value_bits);
 			break;
 		}
 
@@ -658,7 +906,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index global_index;
 			CHECK_RESULT(ReadIndex(&global_index, "get_global global index"));
 			CALLBACK(OnGetGlobalExpr, global_index);
-			CALLBACK(OnOpcodeIndex, global_index);
 			break;
 		}
 
@@ -666,7 +913,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index local_index;
 			CHECK_RESULT(ReadIndex(&local_index, "get_local local index"));
 			CALLBACK(OnGetLocalExpr, local_index);
-			CALLBACK(OnOpcodeIndex, local_index);
 			break;
 		}
 
@@ -674,7 +920,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index global_index;
 			CHECK_RESULT(ReadIndex(&global_index, "set_global global index"));
 			CALLBACK(OnSetGlobalExpr, global_index);
-			CALLBACK(OnOpcodeIndex, global_index);
 			break;
 		}
 
@@ -682,7 +927,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index local_index;
 			CHECK_RESULT(ReadIndex(&local_index, "set_local local index"));
 			CALLBACK(OnSetLocalExpr, local_index);
-			CALLBACK(OnOpcodeIndex, local_index);
 			break;
 		}
 
@@ -691,7 +935,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadIndex(&func_index, "call function index"));
 			ERROR_UNLESS(func_index < NumTotalFuncs(), "invalid call function index: " << func_index);
 			CALLBACK(OnCallExpr, func_index);
-			CALLBACK(OnOpcodeIndex, func_index);
 			break;
 		}
 
@@ -703,7 +946,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&reserved, "call_indirect reserved"));
 			ERROR_UNLESS(reserved == 0, "call_indirect reserved value must be 0");
 			CALLBACK(OnCallIndirectExpr, sig_index);
-			CALLBACK(OnOpcodeUint32Uint32, sig_index, reserved);
 			break;
 		}
 
@@ -711,7 +953,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index local_index;
 			CHECK_RESULT(ReadIndex(&local_index, "tee_local local index"));
 			CALLBACK(OnTeeLocalExpr, local_index);
-			CALLBACK(OnOpcodeIndex, local_index);
 			break;
 		}
 
@@ -735,7 +976,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "load offset"));
 
 			CALLBACK(OnLoadExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -754,7 +994,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "store offset"));
 
 			CALLBACK(OnStoreExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -764,7 +1003,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			ERROR_UNLESS(reserved == 0,
 					"current_memory reserved value must be 0");
 			CALLBACK0(OnCurrentMemoryExpr);
-			CALLBACK(OnOpcodeUint32, reserved);
 			break;
 		}
 
@@ -773,7 +1011,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&reserved, "grow_memory reserved"));
 			ERROR_UNLESS(reserved == 0, "grow_memory reserved value must be 0");
 			CALLBACK0(OnGrowMemoryExpr);
-			CALLBACK(OnOpcodeUint32, reserved);
 			break;
 		}
 
@@ -822,7 +1059,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::F64Max:
 		case Opcode::F64Copysign:
 			CALLBACK(OnBinaryExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::I32Eq:
@@ -858,7 +1094,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::F64Gt:
 		case Opcode::F64Ge:
 			CALLBACK(OnCompareExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::I32Clz:
@@ -882,7 +1117,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::F64Nearest:
 		case Opcode::F64Sqrt:
 			CALLBACK(OnUnaryExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::I32TruncSF32:
@@ -913,7 +1147,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::I32Eqz:
 		case Opcode::I64Eqz:
 			CALLBACK(OnConvertExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::Try: {
@@ -924,7 +1157,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 					"expected valid block signature type");
 			Index num_types = sig_type == Type::Void ? 0 : 1;
 			CALLBACK(OnTryExpr, num_types, &sig_type);
-			CALLBACK(OnOpcodeBlockSig, num_types, &sig_type);
 			break;
 		}
 
@@ -933,14 +1165,12 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index index;
 			CHECK_RESULT(ReadIndex(&index, "exception index"));
 			CALLBACK(OnCatchExpr, index);
-			CALLBACK(OnOpcodeIndex, index);
 			break;
 		}
 
 		case Opcode::CatchAll: {
 			ERROR_UNLESS_OPCODE_ENABLED(opcode);
 			CALLBACK(OnCatchAllExpr);
-			CALLBACK0(OnOpcodeBare);
 			break;
 		}
 
@@ -949,7 +1179,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index depth;
 			CHECK_RESULT(ReadIndex(&depth, "catch depth"));
 			CALLBACK(OnRethrowExpr, depth);
-			CALLBACK(OnOpcodeIndex, depth);
 			break;
 		}
 
@@ -958,7 +1187,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			Index index;
 			CHECK_RESULT(ReadIndex(&index, "exception index"));
 			CALLBACK(OnThrowExpr, index);
-			CALLBACK(OnOpcodeIndex, index);
 			break;
 		}
 
@@ -969,7 +1197,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::I64Extend32S:
 			ERROR_UNLESS_OPCODE_ENABLED(opcode);
 			CALLBACK(OnUnaryExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::I32TruncSSatF32:
@@ -982,7 +1209,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 		case Opcode::I64TruncUSatF64:
 			ERROR_UNLESS_OPCODE_ENABLED(opcode);
 			CALLBACK(OnConvertExpr, opcode);
-			CALLBACK0(OnOpcodeBare);
 			break;
 
 		case Opcode::AtomicWake: {
@@ -992,7 +1218,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "load offset"));
 
 			CALLBACK(OnAtomicWakeExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1004,7 +1229,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "load offset"));
 
 			CALLBACK(OnAtomicWaitExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1021,7 +1245,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "load offset"));
 
 			CALLBACK(OnAtomicLoadExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1038,7 +1261,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "store offset"));
 
 			CALLBACK(OnAtomicStoreExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1090,7 +1312,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "memory offset"));
 
 			CALLBACK(OnAtomicRmwExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1107,7 +1328,6 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 			CHECK_RESULT(ReadU32Leb128(&offset, "memory offset"));
 
 			CALLBACK(OnAtomicRmwCmpxchgExpr, opcode, alignment_log2, offset);
-			CALLBACK(OnOpcodeUint32Uint32, alignment_log2, offset);
 			break;
 		}
 
@@ -1120,7 +1340,7 @@ Result SourceReader::BinaryReader::ReadFunctionBody(Offset end_offset) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadNamesSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadNamesSection(Offset section_size) {
 	CALLBACK(BeginNamesSection, section_size);
 	Index i = 0;
 	Offset previous_read_end = _read_end;
@@ -1209,7 +1429,7 @@ Result SourceReader::BinaryReader::ReadNamesSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadRelocSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadRelocSection(Offset section_size) {
 	CALLBACK(BeginRelocSection, section_size);
 	uint32_t section;
 	CHECK_RESULT(ReadU32Leb128(&section, "section"));
@@ -1243,7 +1463,7 @@ Result SourceReader::BinaryReader::ReadRelocSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadLinkingSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadLinkingSection(Offset section_size) {
 	CALLBACK(BeginLinkingSection, section_size);
 	Offset previous_read_end = _read_end;
 	while (_state->offset < _read_end) {
@@ -1315,7 +1535,7 @@ Result SourceReader::BinaryReader::ReadLinkingSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadExceptionType(TypeVector& sig) {
+Result ModuleReader::BinaryReader::ReadExceptionType(TypeVector& sig) {
 	Index num_values;
 	CHECK_RESULT(ReadIndex(&num_values, "exception type count"));
 	sig.resize(num_values);
@@ -1328,7 +1548,7 @@ Result SourceReader::BinaryReader::ReadExceptionType(TypeVector& sig) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadExceptionSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadExceptionSection(Offset section_size) {
 	CALLBACK(BeginExceptionSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_exceptions, "exception count"));
 	CALLBACK(OnExceptionCount, _num_exceptions);
@@ -1343,7 +1563,7 @@ Result SourceReader::BinaryReader::ReadExceptionSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadCustomSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadCustomSection(Offset section_size) {
 	StringView section_name;
 	CHECK_RESULT(ReadStr(&section_name, "section name"));
 	CALLBACK(BeginCustomSection, section_size, section_name);
@@ -1368,7 +1588,7 @@ Result SourceReader::BinaryReader::ReadCustomSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadTypeSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadTypeSection(Offset section_size) {
 	CALLBACK(BeginTypeSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_signatures, "type count"));
 	CALLBACK(OnTypeCount, _num_signatures);
@@ -1408,7 +1628,7 @@ Result SourceReader::BinaryReader::ReadTypeSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadImportSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadImportSection(Offset section_size) {
 	CALLBACK(BeginImportSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_imports, "import count"));
 	CALLBACK(OnImportCount, _num_imports);
@@ -1476,7 +1696,7 @@ Result SourceReader::BinaryReader::ReadImportSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadFunctionSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadFunctionSection(Offset section_size) {
 	CALLBACK(BeginFunctionSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_function_signatures, "function signature count"));
 	CALLBACK(OnFunctionCount, _num_function_signatures);
@@ -1491,7 +1711,7 @@ Result SourceReader::BinaryReader::ReadFunctionSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadTableSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadTableSection(Offset section_size) {
 	CALLBACK(BeginTableSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_tables, "table count"));
 	ERROR_UNLESS(_num_tables <= 1, "table count (" << _num_tables << ") must be 0 or 1");
@@ -1507,7 +1727,7 @@ Result SourceReader::BinaryReader::ReadTableSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadMemorySection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadMemorySection(Offset section_size) {
 	CALLBACK(BeginMemorySection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_memories, "memory count"));
 	ERROR_UNLESS(_num_memories <= 1, "memory count must be 0 or 1");
@@ -1522,7 +1742,7 @@ Result SourceReader::BinaryReader::ReadMemorySection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadGlobalSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadGlobalSection(Offset section_size) {
 	CALLBACK(BeginGlobalSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_globals, "global count"));
 	CALLBACK(OnGlobalCount, _num_globals);
@@ -1541,7 +1761,7 @@ Result SourceReader::BinaryReader::ReadGlobalSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadExportSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadExportSection(Offset section_size) {
 	CALLBACK(BeginExportSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_exports, "export count"));
 	CALLBACK(OnExportCount, _num_exports);
@@ -1580,7 +1800,7 @@ Result SourceReader::BinaryReader::ReadExportSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadStartSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadStartSection(Offset section_size) {
 	CALLBACK(BeginStartSection, section_size);
 	Index func_index;
 	CHECK_RESULT(ReadIndex(&func_index, "start function index"));
@@ -1590,7 +1810,7 @@ Result SourceReader::BinaryReader::ReadStartSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadElemSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadElemSection(Offset section_size) {
 	CALLBACK(BeginElemSection, section_size);
 	Index num_elem_segments;
 	CHECK_RESULT(ReadIndex(&num_elem_segments, "elem segment count"));
@@ -1618,7 +1838,7 @@ Result SourceReader::BinaryReader::ReadElemSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadCodeSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadCodeSection(Offset section_size) {
 	CALLBACK(BeginCodeSection, section_size);
 	CHECK_RESULT(ReadIndex(&_num_function_bodies, "function body count"));
 	ERROR_UNLESS(_num_function_signatures == _num_function_bodies, "function signature count != function body count");
@@ -1652,7 +1872,7 @@ Result SourceReader::BinaryReader::ReadCodeSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadDataSection(Offset section_size) {
+Result ModuleReader::BinaryReader::ReadDataSection(Offset section_size) {
 	CALLBACK(BeginDataSection, section_size);
 	Index num_data_segments;
 	CHECK_RESULT(ReadIndex(&num_data_segments, "data segment count"));
@@ -1676,7 +1896,7 @@ Result SourceReader::BinaryReader::ReadDataSection(Offset section_size) {
 	return Result::Ok;
 }
 
-Result SourceReader::BinaryReader::ReadSections() {
+Result ModuleReader::BinaryReader::ReadSections() {
 	Result result = Result::Ok;
 
 	while (_state->offset < _state->size) {
@@ -1741,7 +1961,7 @@ Result SourceReader::BinaryReader::ReadSections() {
 	return result;
 }
 
-Result SourceReader::BinaryReader::ReadModule() {
+Result ModuleReader::BinaryReader::ReadModule() {
 	uint32_t magic = 0;
 	CHECK_RESULT(ReadU32(&magic, "magic"));
 	ERROR_UNLESS(magic == WABT_BINARY_MAGIC, "bad magic value");
@@ -1754,14 +1974,23 @@ Result SourceReader::BinaryReader::ReadModule() {
 	return Result::Ok;
 }
 
-bool SourceReader::init(Module *module, const uint8_t *data, size_t size, const ReadOptions &opts) {
+bool ModuleReader::init(Module *module, Environment *env, const uint8_t *data, size_t size, const ReadOptions &opts) {
 	_state = ReaderState(data, size);
+	_env = env;
 	_targetModule = module;
 
 	_opcodes.reserve(256);
 	_labels.reserve(32);
 	_labelStack.reserve(32);
 	_jumpTable.reserve(32);
+
+	_typechecker.set_error_callback([this] (StringStream &message) {
+		if (!_env) {
+			OnError(message);
+		} else {
+			_env->onError("Typechecker", message);
+		}
+	});
 
 	if (_targetModule) {
 		BinaryReader reader(this, &opts);

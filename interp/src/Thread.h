@@ -2,7 +2,7 @@
 #ifndef SRC_THREAD_H_
 #define SRC_THREAD_H_
 
-#include "Utils.h"
+#include "Module.h"
 
 #define WABT_WARN_UNUSED __attribute__ ((warn_unused_result))
 
@@ -55,36 +55,41 @@ public:
 	#undef V
 	};
 
-	struct Options {
-		static const uint32_t kDefaultValueStackSize = 512 * 1024
-				/ sizeof(Value);
-		static const uint32_t kDefaultCallStackSize = 64 * 1024;
+	static const uint32_t kDefaultValueStackSize = 1024;
+	static const uint32_t kDefaultCallStackSize = 256;
 
-		explicit Options(uint32_t value_stack_size = kDefaultValueStackSize,
-				uint32_t call_stack_size = kDefaultCallStackSize);
-
-		uint32_t value_stack_size;
-		uint32_t call_stack_size;
+	struct CallStackFrame {
+		const RuntimeModule *module = nullptr;
+		const Func *func = nullptr;
+		Value *locals = nullptr;
+		const Func::OpcodeRec * position = nullptr;
 	};
 
-	explicit Thread(const Options& = Options());
+	explicit Thread(const Runtime *, Index tag = 0);
+
+	bool init(uint32_t = kDefaultValueStackSize, uint32_t = kDefaultCallStackSize);
 
 	void Reset();
-	Index NumValues() const {
-		return value_stack_top_;
-	}
+	Index NumValues() const { return _valueStackTop; }
 	Result Push(Value) WABT_WARN_UNUSED;
 	Value Pop();
 	Value ValueAt(Index at) const;
 
-	Result Run(int num_instructions = 1);
+	Result Run(const RuntimeModule *module, const Func *func, Value *buffer = nullptr);
+
+	uint8_t *GetMemory(Index memIndex, Index offset) const;
+
+	void PrintStackFrame(std::ostream &, const CallStackFrame &, Index maxOpcodes = kInvalidIndex) const;
+	void PrintStackTrace(std::ostream &, Index maxUnwind = kInvalidIndex, Index maxOpcodes = kInvalidIndex) const;
 
 private:
-	template<typename MemType>
-	Result GetAccessAddress(const uint8_t** pc, void** out_address);
+	Result PushLocals(const Func *func, const Value *buffer, Index storeParams = 0);
 
 	template<typename MemType>
-	Result GetAtomicAccessAddress(const uint8_t** pc, void** out_address);
+	Result GetAccessAddress(const Func::OpcodeRec * pc, void** out_address);
+
+	template<typename MemType>
+	Result GetAtomicAccessAddress(const Func::OpcodeRec * pc, void** out_address);
 
 	Value& Top();
 	Value& Pick(Index depth);
@@ -92,23 +97,21 @@ private:
 	// Push/Pop values with conversions, e.g. Push<float> will convert to the
 	// ValueTypeRep (uint32_t) and push that. Similarly, Pop<float> will pop the
 	// value and convert to float.
-	template<typename T>
-	Result Push(T) WABT_WARN_UNUSED;
-	template<typename T>
-	T Pop();
+	template<typename T> Result Push(T) WABT_WARN_UNUSED;
+	template<typename T> T Pop();
 
 	// Push/Pop values without conversions, e.g. Push<float> will take a uint32_t
 	// argument which is the integer representation of that float value.
 	// Similarly, PopRep<float> will not convert the value to a float.
-	template<typename T>
-	Result PushRep(ValueTypeRep<T>) WABT_WARN_UNUSED;
-	template<typename T>
-	ValueTypeRep<T> PopRep();
+	template<typename T> Result PushRep(ValueTypeRep<T>) WABT_WARN_UNUSED;
+	template<typename T> ValueTypeRep<T> PopRep();
 
-	void DropKeep(uint32_t drop_count, uint8_t keep_count);
+	void StoreResult(Value *, Index stack, Index results);
 
-	Result PushCall(const uint8_t* pc) WABT_WARN_UNUSED;
-	Offset PopCall();
+	Result Run(Index stackTop);
+	Result PushCall(const RuntimeModule *module, const Func *func) WABT_WARN_UNUSED;
+	Result PushCall(const RuntimeModule *module, Index idx, bool import) WABT_WARN_UNUSED;
+	void PopCall(Index);
 
 	template<typename R, typename T> using UnopFunc = R(T);
 	template<typename R, typename T> using UnopTrapFunc = Result(T, R*);
@@ -116,18 +119,17 @@ private:
 	template<typename R, typename T> using BinopTrapFunc = Result(T, T, R*);
 
 	template<typename MemType, typename ResultType = MemType>
-	Result Load(const uint8_t** pc) WABT_WARN_UNUSED;
+	Result Load(const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 	template<typename MemType, typename ResultType = MemType>
-	Result Store(const uint8_t** pc) WABT_WARN_UNUSED;
+	Result Store(const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 	template<typename MemType, typename ResultType = MemType>
-	Result AtomicLoad(const uint8_t** pc) WABT_WARN_UNUSED;
+	Result AtomicLoad(const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 	template<typename MemType, typename ResultType = MemType>
-	Result AtomicStore(const uint8_t** pc) WABT_WARN_UNUSED;
+	Result AtomicStore(const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 	template<typename MemType, typename ResultType = MemType>
-	Result AtomicRmw(BinopFunc<ResultType, ResultType>, const uint8_t** pc)
-			WABT_WARN_UNUSED;
+	Result AtomicRmw(BinopFunc<ResultType, ResultType>, const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 	template<typename MemType, typename ResultType = MemType>
-	Result AtomicRmwCmpxchg(const uint8_t** pc) WABT_WARN_UNUSED;
+	Result AtomicRmwCmpxchg(const Func::OpcodeRec * pc) WABT_WARN_UNUSED;
 
 	template<typename R, typename T = R>
 	Result Unop(UnopFunc<R, T> func) WABT_WARN_UNUSED;
@@ -139,9 +141,15 @@ private:
 	template<typename R, typename T = R>
 	Result BinopTrap(BinopTrapFunc<R, T> func) WABT_WARN_UNUSED;
 
-	std::vector<Value> value_stack_;
-	uint32_t value_stack_top_ = 0;
-	uint32_t call_stack_top_ = 0;
+	const Runtime *_runtime = nullptr;
+
+	Vector<Value> _valueStack;
+	Index _valueStackTop = 0;
+
+	CallStackFrame *_currentFrame = nullptr;
+	Vector<CallStackFrame> _callStack;
+	uint32_t _callStackTop = 0;
+	Index _tag = 0;
 };
 
 }

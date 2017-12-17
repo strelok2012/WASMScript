@@ -15,161 +15,56 @@
  */
 
 #include "ImportDelegate.h"
-#include <algorithm>
-#include <cassert>
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
-#include <memory>
-#include <string>
-#include <vector>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <limits.h>
+#include <string.h>
+#include <ftw.h>
+#include <dirent.h>
+
 #include <iostream>
 
-#include <limits.h>
+namespace wasm {
 
-#include "src/Module.h"
+namespace host {
 
-/*
-using namespace wabt;
-using namespace wabt::interp;
-
-static int s_verbose;
-static const char* s_infile;
-static Thread::Options s_thread_options;
-static Stream* s_trace_stream;
-static Features s_features;
-std::string callExport;
-
-std::unique_ptr<FileStream> s_stdout_stream;
-static std::unique_ptr<FileStream> s_log_stream;
-
-enum class RunVerbosity {
-	Quiet = 0,
-	Verbose = 1,
-};
-
-
-static void ParseOptions(int argc, char** argv) {
-  OptionParser parser("wasm-interp", "");
-
-  parser.AddOption('v', "verbose", "Use multiple times for more info", []() {
-    s_verbose++;
-    s_log_stream = FileStream::CreateStdout();
-  });
-  parser.AddHelpOption();
-  s_features.AddOptions(&parser);
-  parser.AddOption('E', "run-my-export", "SIZE",
-                     "Run export",
-                     [](const std::string& argument) {
-	  	  	  	  	  	  callExport = argument;
-                     });
-  parser.AddOption('C', "call-stack-size", "SIZE",
-                   "Size in elements of the call stack",
-                   [](const std::string& argument) {
-                     // TODO(binji): validate.
-                     s_thread_options.call_stack_size = atoi(argument.c_str());
-                   });
-  parser.AddOption('t', "trace", "Trace execution",
-                   []() { s_trace_stream = s_stdout_stream.get(); });
-
-  parser.AddArgument("filename", OptionParser::ArgumentCount::One,
-                     [](const char* argument) { s_infile = argument; });
-  parser.Parse(argc, argv);
+Result do_decrement(const Thread *thread, const HostFunc * func, Value* buffer) {
+	-- buffer[0].i32;
+	return Result::Ok;
 }
 
-
-static void RunExport(std::string exportName, interp::Module* module, Executor* executor, RunVerbosity verbose) {
-	for (const interp::Export& export_ : module->exports) {
-		if (export_.name == exportName) {
-			TypedValues args;
-			TypedValues results;
-			Value myValue;
-			myValue.i32 = 41;
-			TypedValue myArg = TypedValue(Type::I32, myValue);
-			args.emplace_back(myArg);
-			ExecResult exec_result = executor->RunExport(&export_, args);
-			for (TypedValue& value : exec_result.values) {
-				switch (value.type) {
-				case Type::I32:
-					std::cout << "export result i32 " << value.value.i32
-							<< "\r\n";
-					break;
-				default:
-					break;
-				}
-
-			}
-			if (verbose == RunVerbosity::Verbose) {
-				WriteCall(s_stdout_stream.get(), string_view(), export_.name,
-						args, exec_result.values, exec_result.result);
-			}
-		}
-	}
+Result do_increment(const Thread *thread, const HostFunc * func, Value* buffer) {
+	++ buffer[0].i32;
+	return Result::Ok;
 }
 
-static wabt::Result ReadModule(const char* module_filename, Environment* env, ErrorHandler* error_handler, DefinedModule** out_module) {
-	wabt::Result result;
-	std::vector<uint8_t> file_data;
-
-	*out_module = nullptr;
-
-	result = ReadFile(module_filename, &file_data);
-	if (Succeeded(result)) {
-		const bool kReadDebugNames = true;
-		const bool kStopOnFirstError = true;
-		ReadBinaryOptions options(s_features, s_log_stream.get(),
-				kReadDebugNames, kStopOnFirstError);
-		result = ReadBinaryInterp(env, DataOrNull(file_data), file_data.size(),
-				&options, error_handler, out_module);
-
-		if (Succeeded(result)) {
-			if (s_verbose)
-				env->DisassembleModule(s_stdout_stream.get(), *out_module);
-		}
-	}
-	return result;
 }
 
-static void InitEnvironment(Environment* env) {
-	HostModule* host_module = env->AppendHostModule("env");
-	host_module->import_delegate.reset(new ImportDelegate());
 }
-
-static wabt::Result ReadAndRunModule(const char* module_filename) {
-	wabt::Result result;
-	Environment env;
-	InitEnvironment(&env);
-
-	ErrorHandlerFile error_handler(Location::Type::Binary);
-	DefinedModule* module = nullptr;
-	result = ReadModule(module_filename, &env, &error_handler, &module);
-	if (Succeeded(result)) {
-		Executor executor(&env, s_trace_stream, s_thread_options);
-		ExecResult exec_result = executor.RunStartFunction(module);
-		if (exec_result.result == interp::Result::Ok) {
-			RunExport(callExport, module, &executor, RunVerbosity::Verbose);
-		} else {
-			WriteResult(s_stdout_stream.get(), "error running start function",
-					exec_result.result);
-		}
-	}
-	return result;
-}
-
-int ProgramMain(int argc, char** argv) {
-	InitStdio();
-	ParseOptions(argc, argv);
-	s_stdout_stream = FileStream::CreateStdout();
-
-	wabt::Result result = ReadAndRunModule(s_infile);
-	return result != wabt::Result::Ok;
-}*/
-
 
 void process_file_data(const char *filename, const uint8_t *data, size_t size) {
-	wasm::Module mod;
+	wasm::Environment env;
+	if (auto mod = env.loadModule("test", data, size)) {
+		mod->printInfo(std::cout);
 
-	mod.init(data, size);
+		auto envMod = env.getEnvModule();
+		envMod->addFunc("do_decrement", { wasm::Type::I32 }, { wasm::Type::I32 }, &wasm::host::do_decrement);
+		envMod->addFunc("do_increment", { wasm::Type::I32 }, { wasm::Type::I32 }, &wasm::host::do_increment);
+
+		wasm::ThreadedRuntime runtime;
+		if (runtime.init(&env, wasm::LinkingThreadOptions())) {
+			if (auto func = runtime.getExportFunc("test", "plus_one")) {
+				wasm::Vector<wasm::Value> buffer{ wasm::Value(uint32_t(42)) };
+				if (runtime.call(*func, buffer)) {
+					printf("call: %u\n", buffer[0].i32);
+				}
+			}
+			printf("success\n");
+		} else {
+			printf("failed\n");
+		}
+	}
 }
 
 void read_file(const char *filename) {
@@ -190,17 +85,95 @@ void read_file(const char *filename) {
 	}
 }
 
+void read_file(const char *dirname, const char *filename) {
+	char buf[PATH_MAX + 1] = { 0 };
+
+	FILE *fp;
+	sprintf(buf, "%s/%s", dirname, filename);
+	fp = fopen(buf, "r");
+	if (fp) {
+		fseek(fp, 0, SEEK_END);
+		long int size = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		uint8_t buf[size];
+		if (fread(buf, size, 1, fp) == 1) {
+			wasm::StringView name(filename, strlen(filename) - 5);
+			//if (name == "endianness") {
+				if (auto mod = wasm::test::TestEnvironment::getInstance()->loadModule(name, buf, size)) {
+					//std::cout << "Module " << name << " loaded\n";
+					//mod->printInfo(std::cout);
+				} else {
+					//std::cout << "===== Fail to load module: " << name << " =====\n";
+				}
+			//}
+		}
+
+		fclose(fp);
+	}
+}
+
+void read_assert(const char *dirname, const char *filename) {
+	char buf[PATH_MAX + 1] = { 0 };
+
+	FILE *fp;
+	sprintf(buf, "%s/%s", dirname, filename);
+	fp = fopen(buf, "r");
+	if (fp) {
+		fseek(fp, 0, SEEK_END);
+		long int size = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		uint8_t buf[size];
+		if (fread(buf, size, 1, fp) == 1) {
+			wasm::StringView name(filename, strlen(filename) - 7);
+			if (wasm::test::TestEnvironment::getInstance()->loadAsserts(name, buf, size)) {
+				//std::cout << "Test asserts " << name << " loaded\n";
+			}
+		}
+
+		fclose(fp);
+	}
+}
+
 int main(int argc, char** argv) {
 	char buf[PATH_MAX + 1] = { 0 };
 
 	char *cwd = nullptr;
 
-	if (argc > 1) {
+	if (argc == 2) {
 		cwd = realpath(argv[1], buf);
-	}
 
-	if (cwd) {
-		read_file(cwd);
+		if (cwd) {
+			read_file(cwd);
+		}
+
+	} else if (argc == 3) {
+		if (strcmp(argv[1], "--test-dir") == 0 || strcmp(argv[1], "-D") == 0) {
+
+			cwd = realpath(argv[2], buf);
+			if (!cwd) {
+				return -1;
+			}
+
+			if (cwd) {
+				DIR *dir;
+				struct dirent *dp;
+				dir = opendir(cwd);
+				while ((dp = readdir(dir)) != NULL) {
+					const char *name = dp->d_name;
+					size_t len = strlen(name);
+					if (len > 5 && memcmp(".wasm", name + len - 5, 5) == 0) {
+						read_file(cwd, name);
+					} else if (len > 7 && memcmp(".assert", name + len - 7, 7) == 0) {
+						read_assert(cwd, name);
+					}
+				}
+				closedir(dir);
+
+				if (!wasm::test::TestEnvironment::getInstance()->run()) {
+					return -1;
+				}
+			}
+		}
 	}
 
 	return 0;

@@ -12,7 +12,7 @@
 
 namespace wasm {
 
-static void printType(StringStream &stream, Type t) {
+static void printType(std::ostream &stream, Type t) {
 	switch (t) {
 	case Type::I32: stream << "i32"; break;
 	case Type::I64: stream << "i64"; break;
@@ -27,14 +27,14 @@ static void printType(StringStream &stream, Type t) {
 
 
 /* Type section */
-Result SourceReader::BeginTypeSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnTypeCount(Index count) {
+Result ModuleReader::BeginTypeSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnTypeCount(Index count) {
 	BINARY_PRINTF("%s %u\n", __FUNCTION__, count);
 	_targetModule->_types.reserve(count);
 
 	return Result::Ok;
 }
-Result SourceReader::OnType(Index index, Index nparam, Type* param, Index nresult, Type* result) {
+Result ModuleReader::OnType(Index index, Index nparam, Type* param, Index nresult, Type* result) {
 	if (index == _targetModule->_types.size()) {
 #if (PRINT_CONTENT)
 		StringStream stream; stream << __FUNCTION__ << " [" << index << "]";
@@ -61,144 +61,158 @@ Result SourceReader::OnType(Index index, Index nparam, Type* param, Index nresul
 	}
 	return Result::Error;
 }
-Result SourceReader::EndTypeSection() { return Result::Ok; }
+Result ModuleReader::EndTypeSection() { return Result::Ok; }
 
 
 /* Import section */
-Result SourceReader::BeginImportSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnImportCount(Index count) { return Result::Ok; }
-Result SourceReader::OnImport(Index index, StringView module, StringView field) { return Result::Ok; }
-Result SourceReader::OnImportFunc(Index import, StringView module, StringView field, Index func, Index sig) {
-	BINARY_PRINTF("%s %u %.*s %.*s %u %u\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), func, sig);
-
-	_targetModule->_funcImports.emplace_back(module, field, sig);
-	_targetModule->_funcIndex.emplace_back(_targetModule->_funcImports.size() - 1, true);
+Result ModuleReader::BeginImportSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnImportCount(Index count) {
+	_targetModule->_imports.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::OnImportTable(Index import, StringView module, StringView field, Index table, Type elem, const Limits* elemLimits) {
+Result ModuleReader::OnImport(Index index, StringView module, StringView field) { return Result::Ok; }
+Result ModuleReader::OnImportFunc(Index import, StringView module, StringView field, Index func, Index sig) {
+	BINARY_PRINTF("%s %u %.*s %.*s %u %u\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), func, sig);
+	if (auto sigObj = _targetModule->getSignature(sig)) {
+		_targetModule->_imports.emplace_back(ExternalKind::Func, module, field, sigObj);
+		_targetModule->_funcIndex.emplace_back(_targetModule->_imports.size() - 1, true);
+		return Result::Ok;
+	}
+	PushErrorStream([&] (StringStream &stream) {
+		stream << "Function signature with index " << sig << " not found";
+	});
+	return Result::Error;
+}
+Result ModuleReader::OnImportTable(Index import, StringView module, StringView field, Index table, Type elem, const Limits* elemLimits) {
 	BINARY_PRINTF("%s %u %.*s %.*s %u %d (%lu %lu)\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), table, elem
 			, elemLimits->initial, elemLimits->max);
 
-	_targetModule->_tableImports.emplace_back(module, field, elem, *elemLimits);
-	_targetModule->_tableIndex.emplace_back(_targetModule->_tableImports.size() - 1, true);
+	_targetModule->_imports.emplace_back(ExternalKind::Table, module, field, elem, *elemLimits);
+	_targetModule->_tableIndex.emplace_back(_targetModule->_imports.size() - 1, true);
 	return Result::Ok;
 }
-Result SourceReader::OnImportMemory(Index import, StringView module, StringView field, Index memory, const Limits* pageLimits) {
+Result ModuleReader::OnImportMemory(Index import, StringView module, StringView field, Index memory, const Limits* pageLimits) {
 	BINARY_PRINTF("%s %u %.*s %.*s %u (%lu %lu)\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), memory
 				, pageLimits->initial, pageLimits->max);
 
-	_targetModule->_memoryImports.emplace_back(module, field, *pageLimits);
-	_targetModule->_memoryIndex.emplace_back(_targetModule->_memoryImports.size() - 1, true);
+	_targetModule->_imports.emplace_back(ExternalKind::Memory, module, field, *pageLimits);
+	_targetModule->_memoryIndex.emplace_back(_targetModule->_imports.size() - 1, true);
 	return Result::Ok;
 }
-Result SourceReader::OnImportGlobal(Index import, StringView module, StringView field, Index global, Type type, bool mut) {
+Result ModuleReader::OnImportGlobal(Index import, StringView module, StringView field, Index global, Type type, bool mut) {
 	BINARY_PRINTF("%s %u %.*s %.*s %u %d (%d)\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), global, type, mut);
 
-	_targetModule->_globalImports.emplace_back(module, field, type, mut);
-	_targetModule->_globalIndex.emplace_back(_targetModule->_globalImports.size() - 1, true);
+	_targetModule->_imports.emplace_back(ExternalKind::Global, module, field, type, mut);
+	_targetModule->_globalIndex.emplace_back(_targetModule->_imports.size() - 1, true);
 	return Result::Ok;
 }
-Result SourceReader::OnImportException(Index import, StringView module, StringView field, Index except, TypeVector& sig) {
+Result ModuleReader::OnImportException(Index import, StringView module, StringView field, Index except, TypeVector& sig) {
 	BINARY_PRINTF("%s %u %.*s %.*s %u\n", __FUNCTION__, import, (int)module.size(), module.data(), (int)field.size(), field.data(), except);
-
-	_targetModule->_exceptImports.emplace_back(module, field, move(sig));
 	return Result::Ok;
 }
-Result SourceReader::EndImportSection() { return Result::Ok; }
+Result ModuleReader::EndImportSection() { return Result::Ok; }
 
 
 /* Function section */
-Result SourceReader::BeginFunctionSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnFunctionCount(Index count) {
+Result ModuleReader::BeginFunctionSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnFunctionCount(Index count) {
 	_targetModule->_funcs.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::OnFunction(Index index, Index sig) {
+Result ModuleReader::OnFunction(Index index, Index sig) {
 	BINARY_PRINTF("%s %u %u\n", __FUNCTION__, index, sig);
-	_targetModule->_funcs.emplace_back(sig);
-	_targetModule->_funcIndex.emplace_back(_targetModule->_funcs.size() - 1, false);
-	return Result::Ok;
+	if (auto sigObj = _targetModule->getSignature(sig)) {
+		_targetModule->_funcs.emplace_back(sigObj, _targetModule);
+		_targetModule->_funcIndex.emplace_back(_targetModule->_funcs.size() - 1, false);
+		return Result::Ok;
+	}
+	PushErrorStream([&] (StringStream &stream) {
+		stream << "Function signature with index " << sig << " not found";
+	});
+	return Result::Error;
 }
-Result SourceReader::EndFunctionSection() { return Result::Ok; }
+Result ModuleReader::EndFunctionSection() { return Result::Ok; }
 
 
 /* Table section */
-Result SourceReader::BeginTableSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnTableCount(Index count) {
+Result ModuleReader::BeginTableSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnTableCount(Index count) {
 	_targetModule->_tables.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::OnTable(Index index, Type type, const Limits* limits) {
+Result ModuleReader::OnTable(Index index, Type type, const Limits* limits) {
 	BINARY_PRINTF("%s\n", __FUNCTION__);
 	_targetModule->_tables.emplace_back(type, *limits);
 	_targetModule->_tableIndex.emplace_back(_targetModule->_tables.size() - 1, false);
 	return Result::Ok;
 }
-Result SourceReader::EndTableSection() { return Result::Ok; }
+Result ModuleReader::EndTableSection() { return Result::Ok; }
 
 
 /* Memory section */
-Result SourceReader::BeginMemorySection(Offset size) { return Result::Ok; }
-Result SourceReader::OnMemoryCount(Index count) {
+Result ModuleReader::BeginMemorySection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnMemoryCount(Index count) {
 	_targetModule->_memory.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::OnMemory(Index index, const Limits* limits) {
+Result ModuleReader::OnMemory(Index index, const Limits* limits) {
 	BINARY_PRINTF("%s %u\n", __FUNCTION__, index);
 	_targetModule->_memory.emplace_back(*limits);
 	_targetModule->_memoryIndex.emplace_back(_targetModule->_memory.size() - 1, false);
 	return Result::Ok;
 }
-Result SourceReader::EndMemorySection() { return Result::Ok; }
+Result ModuleReader::EndMemorySection() { return Result::Ok; }
 
 
 /* Global section */
-Result SourceReader::BeginGlobalSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnGlobalCount(Index count) {
+Result ModuleReader::BeginGlobalSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnGlobalCount(Index count) {
 	_targetModule->_globals.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::BeginGlobal(Index index, Type type, bool mut) {
+Result ModuleReader::BeginGlobal(Index index, Type type, bool mut) {
 	BINARY_PRINTF("%s\n", __FUNCTION__);
 	_targetModule->_globals.emplace_back(type, mut);
+	_targetModule->_globalIndex.emplace_back(_targetModule->_globals.size() - 1, false);
 	return Result::Ok;
 }
-Result SourceReader::BeginGlobalInitExpr(Index index) {
+Result ModuleReader::BeginGlobalInitExpr(Index index) {
 	_initExprValue.type = Type::Void;
 	return Result::Ok;
 }
-Result SourceReader::EndGlobalInitExpr(Index index) {
+Result ModuleReader::EndGlobalInitExpr(Index index) {
 	BINARY_PRINTF("%s\n", __FUNCTION__);
 	Module::Global* global = _targetModule->getGlobal(index);
 	if (_initExprValue.type != global->value.type) {
-		StringStream stream;
-		stream << "type mismatch in global, expected ";
-		printType(stream, global->value.type);
-		stream << " but got ";
-		printType(stream, _initExprValue.type);
-		stream << ".";
-		OnError(stream);
-		//return Result::Error;
+		PushErrorStream([&] (std::ostream &stream) {
+			stream << "type mismatch in global, expected ";
+			printType(stream, global->value.type);
+			stream << " but got ";
+			printType(stream, _initExprValue.type);
+			stream << ".";
+		});
+		return Result::Error;
 	}
 	global->value = _initExprValue;
 	return Result::Ok;
 }
-Result SourceReader::EndGlobal(Index index) { return Result::Ok; }
-Result SourceReader::EndGlobalSection() { return Result::Ok; }
+Result ModuleReader::EndGlobal(Index index) { return Result::Ok; }
+Result ModuleReader::EndGlobalSection() { return Result::Ok; }
 
 
 /* Exports section */
-Result SourceReader::BeginExportSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnExportCount(Index count) {
+Result ModuleReader::BeginExportSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnExportCount(Index count) {
 	_targetModule->_exports.reserve(count);
 	return Result::Ok;
 }
-Result SourceReader::OnExport(Index index, ExternalKind kind, Index item_index, StringView name) {
+Result ModuleReader::OnExport(Index index, ExternalKind kind, Index item_index, StringView name) {
 	switch (kind) {
 	case ExternalKind::Func:
 		BINARY_PRINTF("%s func %u %u %.*s\n", __FUNCTION__, index, item_index, (int)name.size(), name.data());
 		if (item_index < _targetModule->_funcIndex.size()) {
-			_targetModule->_exports.emplace_back(kind, _targetModule->_funcIndex[item_index], name);
+			_targetModule->_funcIndex[item_index].exported = true;
+			_targetModule->_exports.emplace_back(kind, item_index, _targetModule->_funcIndex[item_index], name);
 		} else {
 			PushErrorStream([&] (StringStream &stream) {
 				stream << "No func object for export found";
@@ -210,7 +224,8 @@ Result SourceReader::OnExport(Index index, ExternalKind kind, Index item_index, 
 	case ExternalKind::Table:
 		BINARY_PRINTF("%s table %u %u %.*s\n", __FUNCTION__, index, item_index, (int)name.size(), name.data());
 		if (item_index < _targetModule->_tableIndex.size()) {
-			_targetModule->_exports.emplace_back(kind, _targetModule->_tableIndex[item_index], name);
+			_targetModule->_tableIndex[item_index].exported = true;
+			_targetModule->_exports.emplace_back(kind, item_index, _targetModule->_tableIndex[item_index], name);
 		} else {
 			PushErrorStream([&] (StringStream &stream) {
 				stream << "No table object for export found";
@@ -222,7 +237,8 @@ Result SourceReader::OnExport(Index index, ExternalKind kind, Index item_index, 
 	case ExternalKind::Memory:
 		BINARY_PRINTF("%s memory %u %u %.*s\n", __FUNCTION__, index, item_index, (int)name.size(), name.data());
 		if (item_index < _targetModule->_memoryIndex.size()) {
-			_targetModule->_exports.emplace_back(kind, _targetModule->_memoryIndex[item_index], name);
+			_targetModule->_memoryIndex[item_index].exported = true;
+			_targetModule->_exports.emplace_back(kind, item_index, _targetModule->_memoryIndex[item_index], name);
 		} else {
 			PushErrorStream([&] (StringStream &stream) {
 				stream << "No memory object for export found";
@@ -234,7 +250,8 @@ Result SourceReader::OnExport(Index index, ExternalKind kind, Index item_index, 
 	case ExternalKind::Global:
 		BINARY_PRINTF("%s global %u %u %.*s\n", __FUNCTION__, index, item_index, (int)name.size(), name.data());
 		if (item_index < _targetModule->_globalIndex.size()) {
-			_targetModule->_exports.emplace_back(kind, _targetModule->_globalIndex[item_index], name);
+			_targetModule->_globalIndex[item_index].exported = true;
+			_targetModule->_exports.emplace_back(kind, item_index, _targetModule->_globalIndex[item_index], name);
 		} else {
 			PushErrorStream([&] (StringStream &stream) {
 				stream << "No global object for export found";
@@ -256,12 +273,12 @@ Result SourceReader::OnExport(Index index, ExternalKind kind, Index item_index, 
 	}
 	return Result::Ok;
 }
-Result SourceReader::EndExportSection() { return Result::Ok; }
+Result ModuleReader::EndExportSection() { return Result::Ok; }
 
 
 /* Start section */
-Result SourceReader::BeginStartSection(Offset size) { return Result::Ok; }
-Result SourceReader::OnStartFunction(Index func_index) {
+Result ModuleReader::BeginStartSection(Offset size) { return Result::Ok; }
+Result ModuleReader::OnStartFunction(Index func_index) {
 	BINARY_PRINTF("%s %u\n", __FUNCTION__, func_index);
 	if (func_index < _targetModule->_funcIndex.size()) {
 		_targetModule->_startFunction = _targetModule->_funcIndex[func_index];
@@ -271,7 +288,7 @@ Result SourceReader::OnStartFunction(Index func_index) {
 	}
 	return Result::Ok;
 }
-Result SourceReader::EndStartSection() { return Result::Ok; }
+Result ModuleReader::EndStartSection() { return Result::Ok; }
 
 
 }

@@ -7,6 +7,18 @@
 
 namespace wasm {
 
+class Environment;
+class Thread;
+class Runtime;
+class RuntimeModule;
+class Module;
+
+struct HostFunc;
+
+using TypeInitList = std::initializer_list<Type>;
+using ValueInitList = std::initializer_list<Value>;
+using HostFuncCallback = Result (*)(const Thread *, const HostFunc * func, Value* buf);
+
 struct Func {
 	struct Local {
 		Local(Type, Index);
@@ -43,86 +55,74 @@ struct Func {
 		Label(Index results, Index stack)
 		: results(results), stack(stack) { }
 
-		Label(Index results, Index stack, Index offset)
-		: results(results), stack(stack), offset(offset) { }
+		Label(Index results, Index stack, Index offset, Index origin = kInvalidIndex)
+		: results(results), stack(stack), offset(offset), origin(origin) { }
 
 		Label(const Label &) = default;
 
 		Index results = 0;
 		Index stack = 0;
 		Index offset = 0;
+		Index origin = kInvalidIndex;
 	};
 
-	Func(Index sig);
-
-	Index sig;
-	Index resultsCount;
-	Vector<Type> types;
-	Vector<OpcodeRec> opcodes;
-	Vector<Label> labels;
-	Vector<Index> jumpTable;
-};
-
-// Module should store only headers and constant data, not runtime data
-class Module {
-public:
 	struct Signature {
 		Signature() = default;
 		Signature(Index param_count, Type* param_types, Index result_count, Type* result_types);
+		Signature(TypeInitList params, TypeInitList results);
+
+		void printInfo(std::ostream &) const;
 
 		Vector<Type> params;
 		Vector<Type> results;
 	};
 
+	Func(const Signature *sig, const Module *);
+
+	void printInfo(std::ostream &) const;
+
+	const Signature *sig = nullptr;
+	const Module *module = nullptr;
+	Vector<Type> types;
+	Vector<OpcodeRec> opcodes;
+};
+
+// Module should store only headers and constant data, not runtime data
+class Module {
+public:
+	using Signature = Func::Signature;
+
 	struct Import {
 		explicit Import(ExternalKind kind);
-		Import(ExternalKind kind, StringView module, StringView field);
+
+		Import(ExternalKind kind, StringView module, StringView field, const Signature *sig);
+		Import(ExternalKind kind, StringView module, StringView field, Type, const Limits &);
+		Import(ExternalKind kind, StringView module, StringView field, const Limits &);
+		Import(ExternalKind kind, StringView module, StringView field, Type, bool);
 
 		ExternalKind kind;
 		String module;
 		String field;
-	};
 
-	struct FuncImport : Import {
-		FuncImport();
-		FuncImport(StringView module, StringView field);
-		FuncImport(StringView module, StringView field, Index ind);
+		union {
+			struct {
+				const Signature * sig;
+			} func;
 
-		Index sig = kInvalidIndex;
-	};
+			struct {
+				Limits limits;
+				Type type = Type::Anyfunc;
+			} table;
 
-	struct TableImport : Import {
-		TableImport();
-		TableImport(StringView module, StringView field);
-		TableImport(StringView module, StringView field, Type, const Limits &);
+			struct {
+				Limits limits;
+			} memory;
 
-		Type type = Type::Anyfunc;
-		Limits limits;
-	};
-
-	struct MemoryImport : Import {
-		MemoryImport();
-		MemoryImport(StringView module, StringView field);
-		MemoryImport(StringView module, StringView field, const Limits &);
-
-		Limits limits;
-	};
-
-	struct GlobalImport: Import {
-		GlobalImport();
-		GlobalImport(StringView module, StringView field);
-		GlobalImport(StringView module, StringView field, Type, bool);
-
-		Type type = Type::Void;
-		bool mutable_ = false;
-	};
-
-	struct ExceptImport : Import {
-		ExceptImport();
-		ExceptImport(StringView module, StringView field);
-		ExceptImport(StringView module, StringView field, TypeVector &&);
-
-		TypeVector sig;
+			struct {
+				Type type;
+				bool mut;
+			} global;
+		};
 	};
 
 	struct Table {
@@ -145,21 +145,22 @@ public:
 
 		TypedValue value;
 		bool mut = false;
-		Index import = kInvalidIndex; /* or INVALID_INDEX if not imported */
 	};
 
 	struct IndexObject {
 		IndexObject() = default;
 		IndexObject(Index, bool);
 
-		Index index = kInvalidIndex;
+		bool exported = false;
 		bool import = false;
+		Index index = kInvalidIndex;
 	};
 
 	struct Export {
-		Export(ExternalKind, IndexObject, StringView);
+		Export(ExternalKind, Index, IndexObject, StringView);
 
 		ExternalKind kind = ExternalKind::Func;
+		Index object;
 		IndexObject index;
 		String name;
 	};
@@ -181,21 +182,28 @@ public:
 	};
 
 	bool init(const uint8_t *, size_t, const ReadOptions & = ReadOptions());
+	bool init(Environment *, const uint8_t *, size_t, const ReadOptions & = ReadOptions());
 
 	bool hasMemory() const;
 	bool hasTable() const;
 
 	Signature *getSignature(Index);
+	const Signature *getSignature(Index) const;
 
 	Func * getFunc(Index);
 	Table * getTable(Index);
 	Memory * getMemory(Index);
 	Global * getGlobal(Index);
 
-	const FuncImport * getImportFunc(Index) const;
-	const TableImport * getImportTable(Index) const;
-	const MemoryImport * getImportMemory(Index) const;
-	const GlobalImport * getImportGlobal(Index) const;
+	const Func * getFunc(Index) const;
+	const Table * getTable(Index) const;
+	const Memory * getMemory(Index) const;
+	const Global * getGlobal(Index) const;
+
+	const Import * getImportFunc(Index) const;
+	const Import * getImportGlobal(Index) const;
+	const Import * getImportMemory(Index) const;
+	const Import * getImportTable(Index) const;
 
 	const IndexObject *getFunctionIndex(Index) const;
 	const IndexObject *getGlobalIndex(Index) const;
@@ -207,19 +215,25 @@ public:
 	const Vector<IndexObject> & getMemoryIndexVec() const;
 	const Vector<IndexObject> & getTableIndexVec() const;
 
-	std::pair<Signature *, bool> getFuncSignature(Index);
-	std::pair<Type, bool> getGlobalType(Index); // Type, mutable
+	const Vector<Import> & getImports() const;
+	const Vector<Export> & getExports() const;
+
+	std::pair<const Signature *, bool> getFuncSignature(Index) const;
+	const Signature * getFuncSignature(const IndexObject &) const;
+
+	std::pair<Type, bool> getGlobalType(Index) const; // Type, mutable
+	std::pair<Type, bool> getGlobalType(const IndexObject &) const; // Type, mutable
+
+	const Vector<Elements> &getTableElements() const;
+	const Vector<Data> &getMemoryData() const;
+
+	void printInfo(std::ostream &) const;
 
 protected:
-	friend class SourceReader;
+	friend class ModuleReader;
 
-	size_t _typeCount;
 	Vector<Signature> _types;
-	Vector<FuncImport> _funcImports;
-	Vector<TableImport> _tableImports;
-	Vector<MemoryImport> _memoryImports;
-	Vector<GlobalImport> _globalImports;
-	Vector<ExceptImport> _exceptImports;
+	Vector<Import> _imports;
 
 	Vector<Func> _funcs;
 	Vector<Table> _tables;

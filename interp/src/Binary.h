@@ -41,9 +41,9 @@ struct ReaderState {
 	Offset offset = 0;
 };
 
-class SourceReader {
+class ModuleReader {
 public:
-	bool init(Module *, const uint8_t *data, size_t size, const ReadOptions & = ReadOptions());
+	bool init(Module *, Environment *env, const uint8_t *data, size_t size, const ReadOptions & = ReadOptions());
 
 	bool OnError(StringStream & message);
 
@@ -122,15 +122,6 @@ public:
 
 	/* Function expressions; called between BeginFunctionBody and
 	 EndFunctionBody */
-	Result OnOpcode(Opcode Opcode);
-	Result OnOpcodeBare();
-	Result OnOpcodeUint32(uint32_t value);
-	Result OnOpcodeIndex(Index value);
-	Result OnOpcodeUint32Uint32(uint32_t value, uint32_t value2);
-	Result OnOpcodeUint64(uint64_t value);
-	Result OnOpcodeF32(uint32_t value);
-	Result OnOpcodeF64(uint64_t value);
-	Result OnOpcodeBlockSig(Index num_types, Type* sig_types);
 	Result OnAtomicLoadExpr(Opcode opcode, uint32_t alignment_log2, Address offset);
 	Result OnAtomicStoreExpr(Opcode opcode, uint32_t alignment_log2, Address offset);
 	Result OnAtomicRmwExpr(Opcode opcode, uint32_t alignment_log2, Address offset);
@@ -163,7 +154,6 @@ public:
 	Result OnIfExpr(Index num_types, Type* sig_types);
 	Result OnLoadExpr(Opcode opcode, uint32_t alignment_log2, Address offset);
 	Result OnLoopExpr(Index num_types, Type* sig_types);
-	Result OnNopExpr();
 	Result OnRethrowExpr(Index depth);
 	Result OnReturnExpr();
 	Result OnSelectExpr();
@@ -248,9 +238,10 @@ protected:
 	void EmitOpcodeValue(Opcode opcode, uint32_t, uint32_t = 0);
 	void EmitOpcodeValue(Opcode opcode, uint64_t);
 
-	void PushLabel(Index results, Index stack, Index position);
+	void PushLabel(Index results, Index stack, Index position, Index origin = kInvalidIndex);
 	void PopLabel(Index position);
 
+	Environment *_env = nullptr;
 	Module *_targetModule = nullptr;
 	ReaderState _state;
 	TypedValue _initExprValue;
@@ -262,16 +253,15 @@ protected:
 	Vector<Func::Label> _labels;
 	Vector<Index> _labelStack;
 	Vector<Index> _jumpTable;
-
 };
 
 template <typename Callback>
-inline void SourceReader::PushErrorStream(const Callback &cb) {
+inline void ModuleReader::PushErrorStream(const Callback &cb) {
 	StringStream stream;
 	cb(stream);
 	OnError(stream);
 }
 
-}  // namespace wabt
+}
 
 #endif /* WABT_BINARY_H_ */
